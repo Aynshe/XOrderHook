@@ -1,6 +1,0 @@
-F:\.Qodo\XOrder\XOrderHook\XOrderHook_Simple.cpp;F:\.Qodo\XOrder\XOrderHook\MinimalDll\XOrderHook_Simple.obj
-F:\.Qodo\XOrder\XOrderHook\SimpleOverlay.cpp;F:\.Qodo\XOrder\XOrderHook\MinimalDll\SimpleOverlay.obj
-F:\.Qodo\XOrder\XOrderHook\MinHook\src\buffer.c;F:\.Qodo\XOrder\XOrderHook\MinimalDll\buffer.obj
-F:\.Qodo\XOrder\XOrderHook\MinHook\src\hook.c;F:\.Qodo\XOrder\XOrderHook\MinimalDll\hook.obj
-F:\.Qodo\XOrder\XOrderHook\MinHook\src\trampoline.c;F:\.Qodo\XOrder\XOrderHook\MinimalDll\trampoline.obj
-F:\.Qodo\XOrder\XOrderHook\MinHook\src\hde\hde32.c;F:\.Qodo\XOrder\XOrderHook\MinimalDll\hde32.obj
