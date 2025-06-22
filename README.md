@@ -34,7 +34,7 @@ XOrder is a Windows-based system that dynamically reorganizes XInput controllers
 - 🔎 Automatic XInput version detection per game  
 
 ## 🎮 Controller Integration
-- ⬆️ **START + UP (3 seconds)**: Add current focused game to watch list  
+- ⬆️ **START + UP (3 seconds)**: Add current focused game to watch list *(must be done within 90 seconds after injection starts)*
 - ✅ **START (3 seconds)**: Activate controller on XInput index 0  
 - ♻️ **START + BACK (3 seconds)**: Reset mapping to default  
 
@@ -56,7 +56,7 @@ game3.exe "SysWOW64\xinput1_4"
 ## ▶️ Usage
 - 📂 Setup: Place all executables in the same directory with XOrderConfig.ini or use START + UP combo in-game
 - 🏃 Run: Execute XOrderInjector.exe
-- ➕ Add Games: Use START + UP combo while focused on a game window
+- ➕ Add Games: Use START + UP combo while focused on a game window  *(must be done within 90 seconds after injection starts)*
 - 🔢 Activate First Controller: Press START for 3 seconds to assign the controller to index 0. Others increment from 1 to 3.
 - 🔄 Reset Mapping: Press START + BACK for 3 seconds to reset the mapping to default (confirmed by a strong vibration).
 
