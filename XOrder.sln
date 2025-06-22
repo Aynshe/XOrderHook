@@ -1,0 +1,64 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XOrderHook", "XOrderHook\XOrderHook.vcxproj", "{E1F7B7A5-1C02-4B8E-8E1F-000000000001}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XOrderInjector", "XOrderInjector\XOrderInjector.vcxproj", "{E1F7B7A5-1C02-4B8E-8E1F-000000000002}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ListerXOrder", "ListerXOrder\ListerXOrder.vcxproj", "{E1F7B7A5-1C02-4B8E-8E1F-000000000003}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|Win32 = Release|Win32
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Debug|Win32.ActiveCfg = Debug|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Debug|Win32.Build.0 = Debug|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Debug|x64.ActiveCfg = Debug|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Debug|x64.Build.0 = Debug|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Debug|x86.ActiveCfg = MinimalDll|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Debug|x86.Build.0 = MinimalDll|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Release|Win32.ActiveCfg = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Release|Win32.Build.0 = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Release|x64.ActiveCfg = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Release|x64.Build.0 = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Release|x86.ActiveCfg = Release|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000001}.Release|x86.Build.0 = Release|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Debug|Win32.ActiveCfg = Debug|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Debug|Win32.Build.0 = Debug|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Debug|x64.ActiveCfg = Debug|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Debug|x64.Build.0 = Debug|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Debug|x86.ActiveCfg = x86|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Debug|x86.Build.0 = x86|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Release|Win32.ActiveCfg = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Release|Win32.Build.0 = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Release|x64.ActiveCfg = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Release|x64.Build.0 = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Release|x86.ActiveCfg = Release|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000002}.Release|x86.Build.0 = Release|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Debug|Win32.ActiveCfg = Debug|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Debug|Win32.Build.0 = Debug|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Debug|x64.ActiveCfg = Debug|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Debug|x64.Build.0 = Debug|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Debug|x86.ActiveCfg = x86|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Debug|x86.Build.0 = x86|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Release|Win32.ActiveCfg = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Release|Win32.Build.0 = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Release|x64.ActiveCfg = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Release|x64.Build.0 = Release|x64
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Release|x86.ActiveCfg = Release|Win32
+		{E1F7B7A5-1C02-4B8E-8E1F-000000000003}.Release|x86.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {9C29BA8A-F7FD-4294-B769-C0BBFD94D780}
+	EndGlobalSection
+EndGlobal
