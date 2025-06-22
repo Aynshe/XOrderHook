@@ -1,0 +1,8 @@
+LIBRARY XOrderHook
+EXPORTS
+    XInputGetState=XInputGetState_Hook
+    XInputGetStateEx=XInputGetStateEx_Hook
+    XInputSetState=XInputSetState_Hook
+    XInputGetCapabilities=XInputGetCapabilities_Hook
+    XInputEnable=XInputEnable_Hook
+    XInputGetDSoundAudioDeviceGuids=XInputGetDSoundAudioDeviceGuids_Hook
