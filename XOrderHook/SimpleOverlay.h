@@ -9,6 +9,7 @@ private:
     HWND overlayWindow;
     std::wstring currentMessage;
     DWORD hideTime;
+    DWORD showTime;  // Temps où le message a été affiché / Time when message was shown
     bool isVisible;
     HANDLE updateThread;
     bool shouldStop;
@@ -23,6 +24,7 @@ public:
     bool Initialize();
     void ShowMessage(const std::wstring& message, DWORD duration = 2000);
     void Update();
+    void ForceHide();
     void Shutdown();
     ~SimpleOverlay();
 };
@@ -30,4 +32,5 @@ public:
 // Fonctions utilitaires
 void InitializeSimpleOverlay();
 void ShowSimpleOverlayMessage(const std::wstring& message, DWORD duration = 2000);
+void ForceHideSimpleOverlay();
 void ShutdownSimpleOverlay();

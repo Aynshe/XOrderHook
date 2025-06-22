@@ -164,6 +164,10 @@ static std::map<DWORD, int>      g_ResetSecondsHeld;     // physicalIndex -> num
 static std::map<DWORD, ULONGLONG> g_AddGameComboPressTime; // physicalIndex -> time for add game combo
 static std::map<DWORD, int>      g_AddGameSecondsHeld;    // physicalIndex -> number of pulses for add game
 
+// Variables for overlay toggle combo (START+LEFT) / Variables pour le combo de basculement d'overlay (START+GAUCHE)
+static std::map<DWORD, ULONGLONG> g_OverlayToggleComboPressTime; // physicalIndex -> time for overlay toggle combo
+static std::map<DWORD, int>      g_OverlayToggleSecondsHeld;    // physicalIndex -> number of pulses for overlay toggle
+
 // Variables for confirmation vibration sequence / Variables pour la séquence de vibrations de confirmation
 static std::map<DWORD, int>       g_PulsesToSend;         // physicalIndex -> number of remaining pulses to send / physicalIndex -> nombre de pulsations restantes à envoyer
 static std::map<DWORD, ULONGLONG> g_NextPulseTime;        // physicalIndex -> time of next pulse / physicalIndex -> heure de la prochaine pulsation
@@ -239,6 +243,9 @@ static bool g_VerboseLogging = false;  // Initialized to false by default / Init
 
 // Variable for system language (true = French/Belgian, false = English) / Variable pour la langue du système (true = français/belge, false = anglais)
 static bool g_UseFrenchLanguage = false;
+
+// Variable pour contrôler l'affichage de l'overlay SimpleOverlay / Variable to control SimpleOverlay display
+static bool g_SimpleOverlayEnabled = true;
 
 // Function to detect system language / Fonction pour détecter la langue du système
 bool IsSystemLanguageFrench() {
@@ -482,6 +489,9 @@ std::wstring GetConfigPath() {
 
 // Fonction pour charger la configuration depuis un fichier INI / Function to load configuration from INI file
 void LoadConfiguration() {
+    // Forcer la fermeture de l'overlay avant le rechargement / Force overlay to close before reload
+    ForceHideSimpleOverlay();
+    
     bool tempVerbose = g_VerboseLogging;
     g_VerboseLogging = true; // Forcer les logs pendant le chargement / Force logging during loading
 
@@ -635,6 +645,14 @@ void LoadConfiguration() {
         GetLocalizedMessageW(L"Désactivé", L"Disabled");
     WriteToLog(L"[Settings] VerboseLogging final: " + std::wstring(statusMsg));
 
+    // Lire SimpleOverlayEnabled depuis le fichier de l'injecteur / Read SimpleOverlayEnabled from injector file
+    int simpleOverlayEnabled = GetPrivateProfileIntW(L"Settings", L"SimpleOverlayEnabled", 1, injectorConfigPath.c_str());
+    g_SimpleOverlayEnabled = (simpleOverlayEnabled != 0);
+    const wchar_t* overlayStatusMsg = g_SimpleOverlayEnabled ? 
+        GetLocalizedMessageW(L"Activé", L"Enabled") : 
+        GetLocalizedMessageW(L"Désactivé", L"Disabled");
+    WriteToLog(L"[Settings] SimpleOverlayEnabled: " + std::wstring(overlayStatusMsg));
+
     // Ne pas appliquer d'ordre par défaut automatiquement / Don't apply default order automatically
     // Cela permet aux autres méthodes de mappage (GUID, dynamique) de fonctionner / This allows other mapping methods (GUID, dynamic) to work
     if (g_ControllerOrderByHID.empty() && g_ControllerOrderByGUID.empty() && g_ControllerOrderByIndex.empty()) {
@@ -784,6 +802,7 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
             bool startPressed = (physicalState.Gamepad.wButtons & XINPUT_GAMEPAD_START);
             bool dpadDownPressed = (physicalState.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
             bool dpadUpPressed = (physicalState.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP);
+            bool dpadLeftPressed = (physicalState.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
 
             // Priorité 1: Combo pour ajouter un jeu (START + HAUT) / Priority 1: Combo to add game (START + UP)
             if (startPressed && dpadUpPressed && !dpadDownPressed) {
@@ -879,11 +898,13 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                             L"[Action] Controller order reset.";
                         WriteToLog(actionMessage);
                         
-                        // Afficher l'overlay de réinitialisation / Show reset overlay
-                        std::wstring overlayResetMessage = isFrench ?
-                            L"REINITIALISATION PAR DEFAUT" :
-                            L"DEFAULT RESET";
-                        ShowSimpleOverlayMessage(overlayResetMessage, 2000);
+                        // Afficher l'overlay de réinitialisation seulement si activé / Show reset overlay only if enabled
+                        if (g_SimpleOverlayEnabled) {
+                            std::wstring overlayResetMessage = isFrench ?
+                                L"REINITIALISATION PAR DEFAUT" :
+                                L"DEFAULT RESET";
+                            ShowSimpleOverlayMessage(overlayResetMessage, 2000);
+                        }
                         
                         g_DynamicControllerOrderByGUID.clear();
                         g_StartButtonPressTime.clear(); // Nettoyer aussi les états d'assignation / Also clean assignment states
@@ -906,8 +927,60 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                     }
                 }
             }
-            // Priorité 3: Mappage dynamique simple (START seul) / Priority 3: Simple dynamic mapping (START only)
-            else if (startPressed && !dpadUpPressed && !dpadDownPressed) {
+            // Priorité 3: Combo pour basculer l'overlay (START + GAUCHE) / Priority 3: Combo to toggle overlay (START + LEFT)
+            else if (startPressed && dpadLeftPressed && !dpadUpPressed && !dpadDownPressed) {
+                if (g_OverlayToggleComboPressTime.find(physicalIdx) == g_OverlayToggleComboPressTime.end()) {
+                    bool isFrench = IsSystemLanguageFrench();
+                    std::wstring debugMessage = isFrench ?
+                        L"[Debug] Combo TOGGLE OVERLAY détecté sur l'index physique: " + std::to_wstring(physicalIdx) :
+                        L"[Debug] TOGGLE OVERLAY combo detected on physical index: " + std::to_wstring(physicalIdx);
+                    WriteToLog(debugMessage);
+                    g_OverlayToggleComboPressTime[physicalIdx] = currentTime;
+                    g_OverlayToggleSecondsHeld[physicalIdx] = 0;
+                } else {
+                    ULONGLONG timeHeld = currentTime - g_OverlayToggleComboPressTime[physicalIdx];
+                    int currentSecond = static_cast<int>(timeHeld / 1000);
+
+                    if (currentSecond >= 3 && g_OverlayToggleSecondsHeld[physicalIdx] < 3) {
+                        // Basculer l'état de l'overlay / Toggle overlay state
+                        g_SimpleOverlayEnabled = !g_SimpleOverlayEnabled;
+                        
+                        bool isFrench = IsSystemLanguageFrench();
+                        std::wstring actionMessage = isFrench ?
+                            (g_SimpleOverlayEnabled ? L"[Action] Overlay SimpleOverlay activé." : L"[Action] Overlay SimpleOverlay désactivé.") :
+                            (g_SimpleOverlayEnabled ? L"[Action] SimpleOverlay enabled." : L"[Action] SimpleOverlay disabled.");
+                        WriteToLog(actionMessage);
+                        
+                        // Afficher l'overlay de confirmation seulement si l'overlay est activé / Show confirmation overlay only if overlay is enabled
+                        if (g_SimpleOverlayEnabled) {
+                            std::wstring overlayToggleMessage = isFrench ?
+                                L"OVERLAY ACTIVE" :
+                                L"OVERLAY ENABLED";
+                            ShowSimpleOverlayMessage(overlayToggleMessage, 2000);
+                        }
+                        
+                        // Vibration de confirmation / Confirmation vibration
+                        if (OriginalXInputSetState) {
+                            XINPUT_VIBRATION vibration = {40000, 40000};
+                            OriginalXInputSetState(physicalIdx, &vibration);
+                            g_VibrationStopTime[physicalIdx] = currentTime + 300;
+                        }
+                        
+                        g_OverlayToggleSecondsHeld[physicalIdx] = 3;
+                        g_OverlayToggleComboPressTime.erase(physicalIdx);
+                    } else if (currentSecond > 0 && currentSecond < 3 && g_OverlayToggleSecondsHeld[physicalIdx] < currentSecond) {
+                        // Vibration de progression / Progress vibration
+                        if (OriginalXInputSetState) {
+                            XINPUT_VIBRATION vibration = {25000, 25000}; // Vibration moyenne / Medium vibration
+                            OriginalXInputSetState(physicalIdx, &vibration);
+                            g_VibrationStopTime[physicalIdx] = currentTime + 100;
+                        }
+                        g_OverlayToggleSecondsHeld[physicalIdx] = currentSecond;
+                    }
+                }
+            }
+            // Priorité 4: Mappage dynamique simple (START seul) / Priority 4: Simple dynamic mapping (START only)
+            else if (startPressed && !dpadUpPressed && !dpadDownPressed && !dpadLeftPressed) {
                 if (g_StartButtonPressTime.find(physicalIdx) == g_StartButtonPressTime.end()) {
                     bool isFrench = IsSystemLanguageFrench();
                     std::wstring debugMessage = isFrench ?
@@ -936,12 +1009,16 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                                 newInfo.index = (DWORD)g_DynamicControllerOrderByGUID.size();
                                 g_DynamicControllerOrderByGUID.push_back(newInfo);
 
-                                // Afficher l'overlay avec l'index assigné / Show overlay with assigned index
+                                // Déclarer isFrench une seule fois pour tout le bloc / Declare isFrench once for the entire block
                                 bool isFrench = IsSystemLanguageFrench();
-                                std::wstring overlayMessage = isFrench ? 
-                                    L"Manette positionnée sur (XINPUT " + std::to_wstring(newInfo.index) + L")" :
-                                    L"Controller positioned on (XINPUT " + std::to_wstring(newInfo.index) + L")";
-                                ShowSimpleOverlayMessage(overlayMessage, 2000);
+                                
+                                // Afficher l'overlay avec l'index assigné seulement si activé / Show overlay with assigned index only if enabled
+                                if (g_SimpleOverlayEnabled) {
+                                    std::wstring overlayMessage = isFrench ? 
+                                        L"Manette positionnée sur (XINPUT " + std::to_wstring(newInfo.index) + L")" :
+                                        L"Controller positioned on (XINPUT " + std::to_wstring(newInfo.index) + L")";
+                                    ShowSimpleOverlayMessage(overlayMessage, 2000);
+                                }
 
                                 wchar_t guidStr[40];
                                 StringFromGUID2(controllerGuid, guidStr, 40);
@@ -978,6 +1055,8 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                 g_ResetSecondsHeld.erase(physicalIdx);
                 g_AddGameComboPressTime.erase(physicalIdx);
                 g_AddGameSecondsHeld.erase(physicalIdx);
+                g_OverlayToggleComboPressTime.erase(physicalIdx);
+                g_OverlayToggleSecondsHeld.erase(physicalIdx);
             }
         }
     }

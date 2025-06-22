@@ -7,7 +7,7 @@ extern bool IsSystemLanguageFrench();
 
 SimpleOverlay* SimpleOverlay::instance = nullptr;
 
-SimpleOverlay::SimpleOverlay() : overlayWindow(nullptr), hideTime(0), isVisible(false), updateThread(nullptr), shouldStop(false) {
+SimpleOverlay::SimpleOverlay() : overlayWindow(nullptr), hideTime(0), showTime(0), isVisible(false), updateThread(nullptr), shouldStop(false) {
 }
 
 SimpleOverlay::~SimpleOverlay() {
@@ -99,6 +99,7 @@ void SimpleOverlay::ShowMessage(const std::wstring& message, DWORD duration) {
     
     currentMessage = message;
     hideTime = GetTickCount() + duration;
+    showTime = GetTickCount();
     isVisible = true;
     
     // Ensure window is on top / S'assurer que la fenêtre est au premier plan
@@ -117,13 +118,36 @@ void SimpleOverlay::ShowMessage(const std::wstring& message, DWORD duration) {
 void SimpleOverlay::Update() {
     if (!isVisible || !overlayWindow) return;
     
+    DWORD currentTime = GetTickCount();
+    
+    // Mécanisme de sécurité: forcer la fermeture après 5 secondes maximum / Safety mechanism: force close after 5 seconds maximum
+    if (currentTime - showTime > 5000) {
+        isVisible = false;
+        ShowWindow(overlayWindow, SW_HIDE);
+        bool isFrench = IsSystemLanguageFrench();
+        std::wstring forceHideMessage = isFrench ? L"[SimpleOverlay] SECURITE: Message forcé à se cacher après 5 secondes" : L"[SimpleOverlay] SAFETY: Message forced to hide after 5 seconds";
+        WriteToLog(forceHideMessage);
+        return;
+    }
+    
     // Check if message should be hidden / Vérifier si il faut cacher le message
-    if (GetTickCount() >= hideTime) {
+    if (currentTime >= hideTime) {
         isVisible = false;
         ShowWindow(overlayWindow, SW_HIDE);
         bool isFrench = IsSystemLanguageFrench();
         std::wstring hideMessage = isFrench ? L"[SimpleOverlay] Message caché automatiquement" : L"[SimpleOverlay] Message hidden automatically";
         WriteToLog(hideMessage);
+    }
+}
+
+void SimpleOverlay::ForceHide() {
+    if (overlayWindow) {
+        isVisible = false;
+        currentMessage.clear();
+        ShowWindow(overlayWindow, SW_HIDE);
+        bool isFrench = IsSystemLanguageFrench();
+        std::wstring forceHideMessage = isFrench ? L"[SimpleOverlay] Overlay forcé à se cacher" : L"[SimpleOverlay] Overlay forced to hide";
+        WriteToLog(forceHideMessage);
     }
 }
 
@@ -305,6 +329,13 @@ void ShowSimpleOverlayMessage(const std::wstring& message, DWORD duration) {
     SimpleOverlay* overlay = SimpleOverlay::GetInstance();
     if (overlay) {
         overlay->ShowMessage(message, duration);
+    }
+}
+
+void ForceHideSimpleOverlay() {
+    SimpleOverlay* overlay = SimpleOverlay::GetInstance();
+    if (overlay) {
+        overlay->ForceHide();
     }
 }
 
