@@ -15,7 +15,7 @@ XOrder is a Windows-based system that dynamically reorganizes XInput controllers
 
 ### 🧷 `XOrderHook.dll`
 - **Purpose**: DLL injected into game processes  
-- **Function**: Intercepts XInput calls and applies custom button mappings  
+- **Function**: Intercepts XInput calls
 - **Architecture**: Supports both x86 and x64 games  
 
 ### 🚀 `XOrderInjector.exe`
