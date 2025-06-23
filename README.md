@@ -1,4 +1,4 @@
-# XOrderHook  ⚠️ **Important**: Hook injection may not work with all games due to anti-cheat protections or incompatible engines.
+# XOrderHook  ⚠️ *Important*: Hook injection may not work with all games due to anti-cheat protections or incompatible engines.
 
 
 # 🎮 XOrder - XInput Controller dynamically reorder
