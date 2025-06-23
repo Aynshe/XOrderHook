@@ -28,8 +28,7 @@ XOrder is a Windows-based system that dynamically reorganizes XInput controllers
   - 💬 Visual overlay notifications  
 
 ### 🗒️ `ListerXOrder.exe`
-- **Purpose**: Utility for listing running processes and XInput information  
-- **Function**: Helps identify games and their XInput usage for configuration  
+- **Purpose**: Utility for listing XInput Controller (only for information)
 
 ## 🎯 Automatic Game Detection
 - 🧠 Monitors running processes against configured game list  
