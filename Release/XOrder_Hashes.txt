@@ -1,0 +1,69 @@
+﻿==============================================
+XOrder - File Hash Report
+==============================================
+Generated: 2025-06-23 22:11:33
+Project: XOrder - XInput Controller Reorder Tool
+Website: https://github.com/Aynshe/XOrderHook
+==============================================
+
+File: SLD3.dll
+Platform: x64
+Size: 167424 bytes
+Modified: 2025-06-23 22:06:26
+SHA256: 7c0225c23442cc0270de2851a54dcc618d8d95266f904755edd43d83e4f6701f
+MD5:    ba20718c8310e0f717e0d0cded7692a1
+----------------------------------------------
+
+File: XOrderHook.dll
+Platform: x64
+Size: 167424 bytes
+Modified: 2025-06-23 22:06:26
+SHA256: 7c0225c23442cc0270de2851a54dcc618d8d95266f904755edd43d83e4f6701f
+MD5:    ba20718c8310e0f717e0d0cded7692a1
+Description: XOrder Hook DLL - XInput Controller Reorder Library
+----------------------------------------------
+
+File: XOrderHook_x86.dll
+Platform: x86
+Size: 151552 bytes
+Modified: 2025-06-23 22:06:39
+SHA256: b3ef36ef2a0b133cfbaf5cef81b9ef1ed0e4fa8613d9d88697e856a3d1c85b42
+MD5:    29f2d181ef996df4b1ce8131b563edf2
+Description: XOrder Hook DLL - XInput Controller Reorder Library
+----------------------------------------------
+
+File: XOrderInjector.exe
+Platform: x64
+Size: 156160 bytes
+Modified: 2025-06-23 22:06:24
+SHA256: 0ed863fad916bc7005520a8c31d336d41a06d5e8266ade0e4347f228add8e3a4
+MD5:    71d7f360644ae4ad60837195e3712e1c
+Privileges: requireAdministrator
+Description: XOrder Injector - XInput Controller Reorder Service
+----------------------------------------------
+
+File: XOrderInjector_x86.exe
+Platform: x86
+Size: 137216 bytes
+Modified: 2025-06-23 22:06:36
+SHA256: e9a8b56ecd996f1482cd3b3559b8d6fb2d994e1cc5eb629cc4f58b8cfbf97c55
+MD5:    2bc57acee15d823a790cd63c5f55e0ad
+Privileges: requireAdministrator
+Description: XOrder Injector - XInput Controller Reorder Service
+----------------------------------------------
+
+==============================================
+Security Features:
+- Windows compatibility manifests integrated
+- Complete version information embedded
+- UAC privilege requirements specified
+- Antivirus false-positive mitigation
+==============================================
+
+Build Information:
+- Compiler: Microsoft Visual Studio 2022 (v143)
+- Configuration: Release
+- Manifest Integration: Linker embedded
+- Company: XOrder Gaming Tools
+- Copyright: Copyright (C) 2024 XOrder Gaming Tools
+==============================================
