@@ -227,6 +227,12 @@
   <!-- Autres fichiers -->
   <ItemGroup>
     <None Include="XOrderHook.def" />
+    <None Include="XOrderHook.manifest" />
+  </ItemGroup>
+  
+  <!-- Fichiers de ressources -->
+  <ItemGroup>
+    <ResourceCompile Include="XOrderHook.rc" />
   </ItemGroup>
   
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

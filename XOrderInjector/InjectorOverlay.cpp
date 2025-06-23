@@ -1,4 +1,5 @@
 #include "InjectorOverlay.h"
+#include "..\XOrderIPC.h" // Include the shared IPC header
 #include <windows.h>
 #include <algorithm>
 #include <iostream>
@@ -383,6 +384,18 @@ LRESULT CALLBACK InjectorOverlay::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam
             
         case WM_DESTROY:
             return 0;
+
+        case WM_COPYDATA: {
+            COPYDATASTRUCT* pcds = (COPYDATASTRUCT*)lParam;
+            if (pcds && pcds->dwData == XORDER_IPC_MESSAGE_ID) {
+                XOrderOverlayMsgData* msgData = (XOrderOverlayMsgData*)pcds->lpData;
+                if (instance) {
+                    instance->ShowMessage(msgData->message, msgData->duration, msgData->isSuccess);
+                }
+                return TRUE; // Indicate that the message was processed
+            }
+            break;
+        }
             
         default:
             return DefWindowProc(hwnd, uMsg, wParam, lParam);

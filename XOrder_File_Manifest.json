@@ -1,0 +1,90 @@
+﻿{
+    "description":  "Legitimate gaming utility for controller management with integrated manifests",
+    "manifest_integration":  {
+                                 "features":  [
+                                                  "Windows compatibility manifests",
+                                                  "Version information resources",
+                                                  "Digital signatures ready",
+                                                  "Antivirus false-positive mitigation"
+                                              ],
+                                 "status":  "completed"
+                             },
+    "version":  "1.0.0",
+    "project":  "XOrder - XInput Controller Reorder Tool",
+    "created":  "2025-06-23T22:11:33.239668",
+    "security_features":  {
+                              "legal_copyright":  "Copyright (C) 2024 XOrder Gaming Tools. All rights reserved.",
+                              "manifest_features":  [
+                                                        "Windows 7/8/8.1/10 compatibility declarations",
+                                                        "UAC privilege requirements specified",
+                                                        "Application identity information",
+                                                        "Trustworthy execution context"
+                                                    ],
+                              "version_info":  "Complete version information embedded",
+                              "file_descriptions":  {
+                                                        "SLD3.dll":  "XOrder Component",
+                                                        "XOrderHook_x86.dll":  "XOrder Hook DLL - XInput Controller Reorder Library",
+                                                        "XOrderHook.dll":  "XOrder Hook DLL - XInput Controller Reorder Library",
+                                                        "XOrderInjector_x86.exe":  "XOrder Injector - XInput Controller Reorder Service",
+                                                        "XOrderInjector.exe":  "XOrder Injector - XInput Controller Reorder Service"
+                                                    },
+                              "company_name":  "XOrder Gaming Tools"
+                          },
+    "files":  {
+                  "SLD3.dll":  {
+                                   "sha256":  "7c0225c23442cc0270de2851a54dcc618d8d95266f904755edd43d83e4f6701f",
+                                   "manifest":  "integrated",
+                                   "modified":  "2025-06-23T22:06:26.090864",
+                                   "path":  "F:/.CascadeProjects_2/XOrder/Release/SLD3.dll",
+                                   "md5":  "ba20718c8310e0f717e0d0cded7692a1",
+                                   "platform":  "x64",
+                                   "size":  167424
+                               },
+                  "XOrderHook_x86.dll":  {
+                                             "sha256":  "b3ef36ef2a0b133cfbaf5cef81b9ef1ed0e4fa8613d9d88697e856a3d1c85b42",
+                                             "manifest":  "integrated",
+                                             "modified":  "2025-06-23T22:06:39.224758",
+                                             "path":  "F:/.CascadeProjects_2/XOrder/Release/XOrderHook_x86.dll",
+                                             "md5":  "29f2d181ef996df4b1ce8131b563edf2",
+                                             "platform":  "x86",
+                                             "size":  151552
+                                         },
+                  "XOrderHook.dll":  {
+                                         "sha256":  "7c0225c23442cc0270de2851a54dcc618d8d95266f904755edd43d83e4f6701f",
+                                         "manifest":  "integrated",
+                                         "modified":  "2025-06-23T22:06:26.090864",
+                                         "path":  "F:/.CascadeProjects_2/XOrder/Release/XOrderHook.dll",
+                                         "md5":  "ba20718c8310e0f717e0d0cded7692a1",
+                                         "platform":  "x64",
+                                         "size":  167424
+                                     },
+                  "XOrderInjector_x86.exe":  {
+                                                 "size":  137216,
+                                                 "manifest":  "integrated",
+                                                 "privileges":  "requireAdministrator",
+                                                 "sha256":  "e9a8b56ecd996f1482cd3b3559b8d6fb2d994e1cc5eb629cc4f58b8cfbf97c55",
+                                                 "modified":  "2025-06-23T22:06:36.964573",
+                                                 "platform":  "x86",
+                                                 "path":  "F:/.CascadeProjects_2/XOrder/Release/XOrderInjector_x86.exe",
+                                                 "md5":  "2bc57acee15d823a790cd63c5f55e0ad"
+                                             },
+                  "XOrderInjector.exe":  {
+                                             "size":  156160,
+                                             "manifest":  "integrated",
+                                             "privileges":  "requireAdministrator",
+                                             "sha256":  "0ed863fad916bc7005520a8c31d336d41a06d5e8266ade0e4347f228add8e3a4",
+                                             "modified":  "2025-06-23T22:06:24.081539",
+                                             "platform":  "x64",
+                                             "path":  "F:/.CascadeProjects_2/XOrder/Release/XOrderInjector.exe",
+                                             "md5":  "71d7f360644ae4ad60837195e3712e1c"
+                                         }
+              },
+    "website":  "https://github.com/Aynshe/XOrderHook",
+    "build_info":  {
+                       "build_date":  "2025-06-23T22:11:33",
+                       "manifest_integration_method":  "Linker embedded",
+                       "configuration":  "Release",
+                       "generated_by":  "Generate-FileManifest.ps1",
+                       "compiler":  "Microsoft Visual Studio 2022 (v143)"
+                   }
+}

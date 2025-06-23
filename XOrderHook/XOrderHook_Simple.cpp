@@ -1,4 +1,4 @@
-﻿#ifndef XORDERHOOK_SIMPLE_CPP
+#ifndef XORDERHOOK_SIMPLE_CPP
 #define XORDERHOOK_SIMPLE_CPP
 
 #define UNICODE
@@ -18,6 +18,8 @@
 #include <iomanip>
 #include <regex>
 #include <cwctype>  // Pour std::iswspace / For std::iswspace
+#include <locale>      // Pour std::locale / For std::locale
+#include <codecvt>     // Pour std::codecvt_utf8_utf16 / For std::codecvt_utf8_utf16
 #include <shlobj.h>
 #include <initguid.h>
 #include <devpkey.h>   // Pour obtenir les propriétés du périphérique / For getting device properties
@@ -96,6 +98,8 @@ static XInputGetStateEx_t OriginalXInputGetStateEx = nullptr;
 
 #include "MinHook/include/MinHook.h"
 #include "SimpleOverlay.h"
+#include "StringUtils.h"
+#include "HookGlobals.h"
 
 // Structure to store controller information / Structure pour stocker les informations d'un contrôleur
 struct ControllerInfo {
@@ -239,13 +243,19 @@ struct ControllerGUID {
 static int g_CallCount = 0;
 
 // Controls logging level (0 = minimal, 1 = verbose) / Contrôle le niveau de journalisation (0 = minimal, 1 = verbeux)
-static bool g_VerboseLogging = false;  // Initialized to false by default / Initialisé à false par défaut
+bool g_VerboseLogging = false;  // Initialized to false by default / Initialisé à false par défaut
+HMODULE g_hModule = NULL;       // Handle to this DLL module, initialized in DllMain / Handle vers ce module DLL, initialisé dans DllMain
 
 // Variable for system language (true = French/Belgian, false = English) / Variable pour la langue du système (true = français/belge, false = anglais)
 static bool g_UseFrenchLanguage = false;
 
 // Variable pour contrôler l'affichage de l'overlay SimpleOverlay / Variable to control SimpleOverlay display
 static bool g_SimpleOverlayEnabled = true;
+
+// Fonction pour permettre à SimpleOverlay d'accéder à l'état global / Function to allow SimpleOverlay to access global state
+bool IsSimpleOverlayGloballyEnabled() {
+    return g_SimpleOverlayEnabled;
+}
 
 // Function to detect system language / Fonction pour détecter la langue du système
 bool IsSystemLanguageFrench() {
@@ -350,68 +360,46 @@ std::string WStringToUTF8(const std::wstring& wstr) {
 
 // Fonction utilitaire pour écrire dans un fichier de log (version pour std::string) / Utility function to write to log file (std::string version)
 void WriteToLog(const std::string& message) {
-    // Convertir en std::wstring et appeler la surcharge pour centraliser la logique. / Convert to std::wstring and call overload to centralize logic.
-    std::wstring wmessage(message.begin(), message.end());
-    WriteToLog(wmessage);
+    // Convertir la chaîne UTF-8 en chaîne large et appeler la surcharge wstring.
+    // Convert the UTF-8 string to a wide string and call the wstring overload.
+    WriteToLog(Utf8ToWide(message));
 }
 
 // Surcharge pour wstring / Overload for wstring
 void WriteToLog(const std::wstring& wmessage) {
-    // Utiliser la conversion ANSI pour la sortie fichier (meilleure compatibilité) / Use ANSI conversion for file output (better compatibility)
-    std::string message;
-    if (!wmessage.empty()) {
-        int size_needed = WideCharToMultiByte(CP_ACP, 0, &wmessage[0], (int)wmessage.size(), NULL, 0, NULL, NULL);
-        if (size_needed > 0) {
-            message.resize(size_needed);
-            WideCharToMultiByte(CP_ACP, 0, &wmessage[0], (int)wmessage.size(), &message[0], size_needed, NULL, NULL);
-        }
+    static bool isFirstWrite = true;
+
+    wchar_t path[MAX_PATH];
+    GetModuleFileNameW(g_hModule, path, MAX_PATH);
+    PathRemoveFileSpecW(path);
+    std::wstring log_file_path = std::wstring(path) + L"\\XOrderHook_Simple.log";
+
+    std::ios_base::openmode mode = std::ios_base::app;
+    if (isFirstWrite) {
+        mode = std::ios_base::trunc;
+        isFirstWrite = false;
     }
-    
-    // Obtenir le chemin du module (DLL) / Get the module (DLL) path
-    wchar_t dllPath[MAX_PATH] = {0};
-    if (GetModuleFileNameW(NULL, dllPath, MAX_PATH) == 0) {
-        OutputDebugStringW(L"[XOrderHook] Impossible d'obtenir le chemin du module\n");
-        return;
-    }
-    
-    // Extraire le répertoire / Extract the directory
-    std::wstring wlogPath = dllPath;
-    size_t lastBackslash = wlogPath.find_last_of(L"\\/");
-    if (lastBackslash != std::wstring::npos) {
-        wlogPath = wlogPath.substr(0, lastBackslash + 1) + L"XOrderHook_Simple.log";
-        
-        // écraser le log au premier appel, sinon ajouter / overwrite log on first call, otherwise append
-        static bool isFirstWrite = true;
-        std::ios_base::openmode mode = std::ios::app;
-        if (isFirstWrite) {
-            mode = std::ios::trunc;
-            isFirstWrite = false;
+
+    std::wofstream log_stream(log_file_path, mode);
+    if (log_stream.is_open()) {
+        try {
+            log_stream.imbue(std::locale(log_stream.getloc(), new std::codecvt_utf8_utf16<wchar_t>));
+        } catch (...) { 
+            // Ignorer l'erreur d'imbue, continuer sans / Ignore imbue error, continue without
         }
 
-        // Écrire dans le fichier log avec encodage ANSI / Write to log file with ANSI encoding
-        std::ofstream logFile(wlogPath.c_str(), mode);
-        if (logFile.is_open()) {
-            // Ajouter un horodatage / Add timestamp
-            SYSTEMTIME st;
-            GetLocalTime(&st);
-            char timestamp[64] = {0};
-            sprintf_s(timestamp, "[%04d-%02d-%02d %02d:%02d:%02d.%03d] ",
-                     st.wYear, st.wMonth, st.wDay,
-                     st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-            
-            // Écrire l'horodatage / Write timestamp
-            logFile.write(timestamp, strlen(timestamp));
-            
-            // Écrire le message en ANSI / Write message in ANSI
-            logFile.write(message.c_str(), message.length());
-            logFile << std::endl;
-        }
+        time_t now = time(0);
+        tm ltm;
+        localtime_s(&ltm, &now);
+        wchar_t time_buf[30];
+        wcsftime(time_buf, 30, L"[%Y-%m-%d %H:%M:%S]", &ltm);
+
+        log_stream << time_buf << L" " << wmessage << std::endl;
     }
-    
-    // Toujours écrire dans la sortie de débogage / Always write to debug output
-    OutputDebugStringW(L"[XOrderHook] ");
-    OutputDebugStringW(wmessage.c_str());
-    OutputDebugStringW(L"\n");
+
+    if (g_VerboseLogging) {
+        OutputDebugStringW((std::wstring(L"[XOrderHook] ") + wmessage + L"\n").c_str());
+    }
 }
 
 // Fonction pour trouver le chemin du fichier de configuration avec fallback via un fichier temporaire / Function to find configuration file path with fallback via temporary file
@@ -892,18 +880,13 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                     int currentSecond = static_cast<int>(timeHeld / 1000);
 
                     if (currentSecond >= 3 && g_ResetSecondsHeld[physicalIdx] < 3) {
-                        bool isFrench = IsSystemLanguageFrench();
-                        std::wstring actionMessage = isFrench ?
-                            L"[Action] Ordre des manettes réinitialisé." :
-                            L"[Action] Controller order reset.";
-                        WriteToLog(actionMessage);
-                        
+                        const char* logMsg = GetLocalizedMessage("[Action] Ordre des manettes réinitialisé.", "[Action] Controller order reset.");
+                        WriteToLog(Utf8ToWide(logMsg));
+
                         // Afficher l'overlay de réinitialisation seulement si activé / Show reset overlay only if enabled
                         if (g_SimpleOverlayEnabled) {
-                            std::wstring overlayResetMessage = isFrench ?
-                                L"REINITIALISATION PAR DEFAUT" :
-                                L"DEFAULT RESET";
-                            ShowSimpleOverlayMessage(overlayResetMessage, 2000);
+                            const char* overlayMsg = GetLocalizedMessage("RÉINITIALISATION PAR DÉFAUT", "DEFAULT RESET");
+                            ShowSimpleOverlayMessage(Utf8ToWide(overlayMsg), 2000);
                         }
                         
                         g_DynamicControllerOrderByGUID.clear();
@@ -930,11 +913,8 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
             // Priorité 3: Combo pour basculer l'overlay (START + GAUCHE) / Priority 3: Combo to toggle overlay (START + LEFT)
             else if (startPressed && dpadLeftPressed && !dpadUpPressed && !dpadDownPressed) {
                 if (g_OverlayToggleComboPressTime.find(physicalIdx) == g_OverlayToggleComboPressTime.end()) {
-                    bool isFrench = IsSystemLanguageFrench();
-                    std::wstring debugMessage = isFrench ?
-                        L"[Debug] Combo TOGGLE OVERLAY détecté sur l'index physique: " + std::to_wstring(physicalIdx) :
-                        L"[Debug] TOGGLE OVERLAY combo detected on physical index: " + std::to_wstring(physicalIdx);
-                    WriteToLog(debugMessage);
+                    const char* debugLog = GetLocalizedMessage("[Debug] Combo TOGGLE OVERLAY détecté sur l'index physique: ", "[Debug] TOGGLE OVERLAY combo detected on physical index: ");
+                    WriteToLog(Utf8ToWide(std::string(debugLog) + std::to_string(physicalIdx)));
                     g_OverlayToggleComboPressTime[physicalIdx] = currentTime;
                     g_OverlayToggleSecondsHeld[physicalIdx] = 0;
                 } else {
@@ -942,21 +922,38 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                     int currentSecond = static_cast<int>(timeHeld / 1000);
 
                     if (currentSecond >= 3 && g_OverlayToggleSecondsHeld[physicalIdx] < 3) {
+                        // Sauvegarder l'état actuel avant de le changer / Save current state before changing it
+                        bool wasEnabled = g_SimpleOverlayEnabled;
+                        
                         // Basculer l'état de l'overlay / Toggle overlay state
                         g_SimpleOverlayEnabled = !g_SimpleOverlayEnabled;
                         
-                        bool isFrench = IsSystemLanguageFrench();
-                        std::wstring actionMessage = isFrench ?
-                            (g_SimpleOverlayEnabled ? L"[Action] Overlay SimpleOverlay activé." : L"[Action] Overlay SimpleOverlay désactivé.") :
-                            (g_SimpleOverlayEnabled ? L"[Action] SimpleOverlay enabled." : L"[Action] SimpleOverlay disabled.");
-                        WriteToLog(actionMessage);
-                        
-                        // Afficher l'overlay de confirmation seulement si l'overlay est activé / Show confirmation overlay only if overlay is enabled
+                        const char* actionMsg;
                         if (g_SimpleOverlayEnabled) {
-                            std::wstring overlayToggleMessage = isFrench ?
-                                L"OVERLAY ACTIVE" :
-                                L"OVERLAY ENABLED";
-                            ShowSimpleOverlayMessage(overlayToggleMessage, 2000);
+                            actionMsg = GetLocalizedMessage("[Action] Overlay SimpleOverlay activé.", "[Action] SimpleOverlay enabled.");
+                        } else {
+                            actionMsg = GetLocalizedMessage("[Action] Overlay SimpleOverlay désactivé.", "[Action] SimpleOverlay disabled.");
+                        }
+                        WriteToLog(Utf8ToWide(actionMsg));
+                        
+                        // Afficher l'overlay de confirmation selon le NOUVEL état / Show confirmation overlay according to NEW state
+                        if (g_SimpleOverlayEnabled) {
+                            // Overlay activé - Afficher message de confirmation / Overlay enabled - Show confirmation message
+                            const char* overlayMsg = GetLocalizedMessage("OVERLAY ACTIVÉ", "OVERLAY ENABLED");
+                            ShowSimpleOverlayMessageForced(Utf8ToWide(overlayMsg), 2000);
+                        } else {
+                            // Overlay désactivé - Afficher message de désactivation / Overlay disabled - Show disable message
+                            const char* overlayMsg = GetLocalizedMessage("OVERLAY DÉSACTIVÉ", "OVERLAY DISABLED");
+                            ShowSimpleOverlayMessageForced(Utf8ToWide(overlayMsg), 2000);
+                            
+                            // Forcer la fermeture d'urgence de tout overlay existant après un délai / Force emergency closure of any existing overlay after delay
+                            CreateThread(nullptr, 0, [](LPVOID param) -> DWORD {
+                                Sleep(2100); // Attendre que le message de désactivation soit affiché / Wait for disable message to be shown
+                                EmergencyHideSimpleOverlay();
+                                const char* emergencyMsg = GetLocalizedMessage("[Action] Fermeture d'urgence appliquée lors de la désactivation", "[Action] Emergency closure applied during deactivation");
+                                WriteToLog(Utf8ToWide(emergencyMsg));
+                                return 0;
+                            }, nullptr, 0, nullptr);
                         }
                         
                         // Vibration de confirmation / Confirmation vibration
@@ -1014,26 +1011,26 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                                 
                                 // Afficher l'overlay avec l'index assigné seulement si activé / Show overlay with assigned index only if enabled
                                 if (g_SimpleOverlayEnabled) {
-                                    std::wstring overlayMessage = isFrench ? 
-                                        L"Manette positionnée sur (XINPUT " + std::to_wstring(newInfo.index) + L")" :
-                                        L"Controller positioned on (XINPUT " + std::to_wstring(newInfo.index) + L")";
-                                    ShowSimpleOverlayMessage(overlayMessage, 2000);
+                                    std::string overlayMessageA = isFrench ?
+                                        "Manette positionnée sur (XINPUT " + std::to_string(newInfo.index) + ")" :
+                                        "Controller positioned on (XINPUT " + std::to_string(newInfo.index) + ")";
+                                    ShowSimpleOverlayMessage(Utf8ToWide(overlayMessageA), 2000);
                                 }
 
                                 wchar_t guidStr[40];
                                 StringFromGUID2(controllerGuid, guidStr, 40);
-                                std::wstring logMessage = isFrench ?
-                                    L"[Mappage Dynamique] Manette " + std::wstring(guidStr) + L" assignée à l'index " + std::to_wstring(newInfo.index) :
-                                    L"[Dynamic Mapping] Controller " + std::wstring(guidStr) + L" assigned to index " + std::to_wstring(newInfo.index);
-                                WriteToLog(logMessage);
+                                std::string logMessageA = isFrench ?
+                                    "[Mappage Dynamique] Manette " + WideToUtf8(guidStr) + " assignée à l'index " + std::to_string(newInfo.index) :
+                                    "[Dynamic Mapping] Controller " + WideToUtf8(guidStr) + " assigned to index " + std::to_string(newInfo.index);
+                                WriteToLog(logMessageA);
 
                                 // Lancer la séquence de vibrations de confirmation / Start confirmation vibration sequence
                                 g_PulsesToSend[physicalIdx] = newInfo.index + 1;
                                 g_NextPulseTime[physicalIdx] = currentTime; // Démarrer immédiatement / Start immediately
-                                std::wstring vibrationMessage = isFrench ?
-                                    L"[Vibration] Lancement de " + std::to_wstring(newInfo.index + 1) + L" pulsations pour l'index " + std::to_wstring(newInfo.index) :
-                                    L"[Vibration] Starting " + std::to_wstring(newInfo.index + 1) + L" pulses for index " + std::to_wstring(newInfo.index);
-                                WriteToLog(vibrationMessage);
+                                std::string vibrationMessageA = isFrench ?
+                                    "[Vibration] Lancement de " + std::to_string(newInfo.index + 1) + " pulsations pour l'index " + std::to_string(newInfo.index) :
+                                    "[Vibration] Starting " + std::to_string(newInfo.index + 1) + " pulses for index " + std::to_string(newInfo.index);
+                                WriteToLog(vibrationMessageA);
                             }
                         }
                         g_SecondsHeld[physicalIdx] = 3;
@@ -1454,6 +1451,7 @@ bool InitializeMinHook() {
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
         case DLL_PROCESS_ATTACH: {
+            g_hModule = hModule; // Store the module handle for later use / Stocker le handle du module pour utilisation ultérieure
             // Désactiver les appels de thread inutiles / Disable unnecessary thread calls
             DisableThreadLibraryCalls(hModule);
             

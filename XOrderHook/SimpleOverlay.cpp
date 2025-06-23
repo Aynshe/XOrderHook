@@ -1,13 +1,18 @@
-﻿#include "SimpleOverlay.h"
+#include "SimpleOverlay.h"
+#include "..\XOrderIPC.h"
+#include "HookGlobals.h" // Include the shared IPC header
 #include <algorithm>
+#include <stdio.h> // For swprintf_s
 
 // External declarations / Déclarations externes
 extern void WriteToLog(const std::wstring& message);
 extern bool IsSystemLanguageFrench();
+extern bool IsSimpleOverlayGloballyEnabled(); // Fonction pour vérifier l'état global / Function to check global state
 
 SimpleOverlay* SimpleOverlay::instance = nullptr;
 
-SimpleOverlay::SimpleOverlay() : overlayWindow(nullptr), hideTime(0), showTime(0), isVisible(false), updateThread(nullptr), shouldStop(false) {
+SimpleOverlay::SimpleOverlay() : overlayWindow(nullptr), hideTime(0), showTime(0), isVisible(false), updateThread(nullptr), shouldStop(false), 
+                                 lastForceHideCheck(0), consecutiveFailedHides(0), emergencyTransparentMode(false), isInCleanup(false) {
 }
 
 SimpleOverlay::~SimpleOverlay() {
@@ -26,124 +31,103 @@ void SimpleOverlay::ResetInstance() {
 }
 
 bool SimpleOverlay::Initialize() {
-    if (overlayWindow) return true; // Déjà initialisé
-    
-    bool isFrench = IsSystemLanguageFrench();
-    std::wstring initMessage = isFrench ? L"[SimpleOverlay] Initialisation..." : L"[SimpleOverlay] Initializing...";
-    WriteToLog(initMessage);
-    
-    // Register window class / Enregistrer la classe de fenêtre
-    WNDCLASSEXW wc = {};
-    wc.cbSize = sizeof(WNDCLASSEXW);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = WindowProc;
-    wc.hInstance = GetModuleHandle(nullptr);
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr; // No background / Pas de background
-    wc.lpszClassName = L"XOrderSimpleOverlay";
-    
-    if (!RegisterClassExW(&wc)) {
-        std::wstring errorMessage = isFrench ? L"[SimpleOverlay] échec de l'enregistrement de la classe" : L"[SimpleOverlay] failed to register window class";
-        WriteToLog(errorMessage);
-        return false;
-    }
-    
-    // Create overlay window / Créer la fenêtre overlay
-    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-    
-    overlayWindow = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
-        L"XOrderSimpleOverlay",
-        L"XOrder Overlay",
-        WS_POPUP,
-        0, 0, screenWidth, screenHeight,
-        nullptr, nullptr, GetModuleHandle(nullptr), this
-    );
-    
-    if (!overlayWindow) {
-        std::wstring errorMessage = isFrench ? L"[SimpleOverlay] échec de la création de la fenêtre" : L"[SimpleOverlay] failed to create window";
-        WriteToLog(errorMessage);
-        return false;
-    }
-    
-    // Make window transparent (black background = transparent) / Rendre la fenêtre transparente (fond noir = transparent)
-    SetLayeredWindowAttributes(overlayWindow, RGB(0, 0, 0), 255, LWA_COLORKEY | LWA_ALPHA);
-    
-    // Create update thread / Créer le thread de mise à jour
-    shouldStop = false;
-    updateThread = CreateThread(nullptr, 0, UpdateThreadProc, this, 0, nullptr);
-    if (!updateThread) {
-        std::wstring errorMessage = isFrench ? L"[SimpleOverlay] échec de la création du thread de mise à jour" : L"[SimpleOverlay] failed to create update thread";
-        WriteToLog(errorMessage);
-        DestroyWindow(overlayWindow);
-        overlayWindow = nullptr;
-        return false;
-    }
-    
-    std::wstring successMessage = isFrench ? L"[SimpleOverlay] Initialisé avec succès" : L"[SimpleOverlay] Initialized successfully";
-    WriteToLog(successMessage);
+    // The local overlay is now disabled. We just return true.
+    // La superposition locale est maintenant désactivée. On retourne simplement true.
     return true;
 }
 
 void SimpleOverlay::ShowMessage(const std::wstring& message, DWORD duration) {
-    bool isFrench = IsSystemLanguageFrench();
-    std::wstring displayMessage = isFrench ? L"[SimpleOverlay] Affichage: " + message : L"[SimpleOverlay] Displaying: " + message;
-    WriteToLog(displayMessage);
-    
-    if (!overlayWindow && !Initialize()) {
-        std::wstring errorMessage = isFrench ? L"[SimpleOverlay] Impossible d'initialiser" : L"[SimpleOverlay] Unable to initialize";
-        WriteToLog(errorMessage);
-        return;
+    // Create a data structure to pass to the new thread.
+    // This needs to be dynamically allocated so it survives after this function returns.
+    AsyncShowMessageData* data = new AsyncShowMessageData();
+    data->message = message;
+    data->duration = duration;
+
+    // Create a new thread to send the message. This makes the call fully asynchronous.
+    HANDLE hThread = CreateThread(nullptr, 0, AsyncShowMessageThreadProc, data, 0, nullptr);
+    if (hThread) {
+        // We don't need to wait for the thread, so we can close the handle immediately.
+        // The thread will continue to run until it finishes.
+        CloseHandle(hThread);
+    } else {
+        // If thread creation fails, we must delete the data to prevent a memory leak.
+        delete data;
+        WriteToLog(L"[SimpleOverlay] IPC Error: Failed to create async message thread.");
     }
-    
-    currentMessage = message;
-    hideTime = GetTickCount() + duration;
-    showTime = GetTickCount();
-    isVisible = true;
-    
-    // Ensure window is on top / S'assurer que la fenêtre est au premier plan
-    SetWindowPos(overlayWindow, HWND_TOPMOST, 0, 0, 0, 0, 
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    
-    // Show and redraw / Afficher et redessiner
-    ShowWindow(overlayWindow, SW_SHOWNOACTIVATE);
-    UpdateWindow(overlayWindow);
-    InvalidateRect(overlayWindow, nullptr, TRUE);
-    
-    // Force immediate redraw / Forcer un redraw immédiat
-    RedrawWindow(overlayWindow, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+}
+
+// This function runs in a separate thread to send the IPC message.
+// Cette fonction s'exécute dans un thread séparé pour envoyer le message IPC.
+DWORD WINAPI SimpleOverlay::AsyncShowMessageThreadProc(LPVOID lpParam) {
+    // Cast the parameter back to our data structure.
+    AsyncShowMessageData* data = static_cast<AsyncShowMessageData*>(lpParam);
+    if (!data) {
+        return 1; // Should not happen.
+    }
+
+    HWND injectorHwnd = nullptr;
+    wchar_t debugMsg[512];
+
+    // Retry finding the window a few times to handle timing issues.
+    // Réessayer de trouver la fenêtre plusieurs fois pour gérer les problèmes de synchronisation.
+    for (int i = 0; i < 5; ++i) {
+        injectorHwnd = FindWindowW(L"XOrderInjectorOverlay", nullptr);
+        if (injectorHwnd) {
+            if (g_VerboseLogging) {
+                swprintf_s(debugMsg, L"[XOrderHook] Found injector overlay window handle: %p on try %d\n", injectorHwnd, i + 1);
+                OutputDebugStringW(debugMsg);
+            }
+            break;
+        }
+        Sleep(100); // Wait 100ms before retrying / Attendre 100ms avant de réessayer
+    }
+
+    if (injectorHwnd) {
+        XOrderOverlayMsgData msgData;
+        wcsncpy_s(msgData.message, MAX_OVERLAY_MSG_LENGTH, data->message.c_str(), _TRUNCATE);
+        msgData.duration = data->duration;
+        msgData.isSuccess = true;
+
+        COPYDATASTRUCT cds;
+        cds.dwData = XORDER_IPC_MESSAGE_ID;
+        cds.cbData = sizeof(XOrderOverlayMsgData);
+        cds.lpData = &msgData;
+
+        // Send the message with a timeout.
+        // Envoyer le message avec un délai d'attente.
+        LRESULT result = SendMessageTimeout(injectorHwnd, WM_COPYDATA, (WPARAM)NULL, (LPARAM)&cds, SMTO_NORMAL, 1000, nullptr);
+        if (g_VerboseLogging) {
+            if (result == 0) {
+                swprintf_s(debugMsg, L"[XOrderHook] IPC Error: SendMessageTimeout failed with code: %lu\n", GetLastError());
+                OutputDebugStringW(debugMsg);
+            } else {
+                OutputDebugStringW(L"[XOrderHook] IPC message sent successfully.\n");
+            }
+        }
+    } else {
+        if (g_VerboseLogging) {
+            // Use thread-safe logging for debugging.
+            OutputDebugStringW(L"[XOrderHook] IPC Error: Could not find injector overlay window after 5 retries.\n");
+        }
+    }
+
+    // IMPORTANT: Clean up the dynamically allocated data.
+    // IMPORTANT : Nettoyer les données allouées dynamiquement.
+    delete data;
+    return 0;
 }
 
 void SimpleOverlay::Update() {
-    if (!isVisible || !overlayWindow) return;
-    
-    DWORD currentTime = GetTickCount();
-    
-    // Mécanisme de sécurité: forcer la fermeture après 5 secondes maximum / Safety mechanism: force close after 5 seconds maximum
-    if (currentTime - showTime > 5000) {
-        isVisible = false;
-        ShowWindow(overlayWindow, SW_HIDE);
-        bool isFrench = IsSystemLanguageFrench();
-        std::wstring forceHideMessage = isFrench ? L"[SimpleOverlay] SECURITE: Message forcé à se cacher après 5 secondes" : L"[SimpleOverlay] SAFETY: Message forced to hide after 5 seconds";
-        WriteToLog(forceHideMessage);
-        return;
-    }
-    
-    // Check if message should be hidden / Vérifier si il faut cacher le message
-    if (currentTime >= hideTime) {
-        isVisible = false;
-        ShowWindow(overlayWindow, SW_HIDE);
-        bool isFrench = IsSystemLanguageFrench();
-        std::wstring hideMessage = isFrench ? L"[SimpleOverlay] Message caché automatiquement" : L"[SimpleOverlay] Message hidden automatically";
-        WriteToLog(hideMessage);
-    }
+    // The local overlay is disabled, so this update logic is no longer needed.
+    // La superposition locale est désactivée, cette logique de mise à jour n'est plus nécessaire.
 }
 
 void SimpleOverlay::ForceHide() {
     if (overlayWindow) {
         isVisible = false;
         currentMessage.clear();
+        consecutiveFailedHides = 0;
+        emergencyTransparentMode = false;
         ShowWindow(overlayWindow, SW_HIDE);
         bool isFrench = IsSystemLanguageFrench();
         std::wstring forceHideMessage = isFrench ? L"[SimpleOverlay] Overlay forcé à se cacher" : L"[SimpleOverlay] Overlay forced to hide";
@@ -151,24 +135,108 @@ void SimpleOverlay::ForceHide() {
     }
 }
 
-void SimpleOverlay::Shutdown() {
-    // Stop update thread / Arrêter le thread de mise à jour
-    shouldStop = true;
-    if (updateThread) {
-        WaitForSingleObject(updateThread, 5000); // Wait max 5 seconds / Attendre max 5 secondes
-        CloseHandle(updateThread);
-        updateThread = nullptr;
-    }
-    
-    if (overlayWindow) {
-        DestroyWindow(overlayWindow);
-        overlayWindow = nullptr;
-    }
-    UnregisterClassW(L"XOrderSimpleOverlay", GetModuleHandle(nullptr));
+void SimpleOverlay::EmergencyHide() {
+    if (!overlayWindow) return;
     
     bool isFrench = IsSystemLanguageFrench();
-    std::wstring shutdownMessage = isFrench ? L"[SimpleOverlay] Fermé" : L"[SimpleOverlay] Closed";
-    WriteToLog(shutdownMessage);
+    std::wstring emergencyMessage = isFrench ? 
+        L"[SimpleOverlay] MODE URGENCE: Fermeture forcée" :
+        L"[SimpleOverlay] EMERGENCY MODE: Forced closure";
+    WriteToLog(emergencyMessage);
+    
+    isVisible = false;
+    currentMessage.clear();
+    emergencyTransparentMode = true;
+    
+    // Méthode 1: Cacher normalement / Method 1: Hide normally
+    ShowWindow(overlayWindow, SW_HIDE);
+    
+    // Méthode 2: Déplacer hors écran / Method 2: Move off-screen
+    SetWindowPos(overlayWindow, HWND_BOTTOM, -10000, -10000, 1, 1, SWP_NOACTIVATE);
+    
+    // Méthode 3: Rendre complètement transparent / Method 3: Make completely transparent
+    SetLayeredWindowAttributes(overlayWindow, RGB(0, 0, 0), 0, LWA_ALPHA);
+    
+    // Méthode 4: Minimiser puis cacher / Method 4: Minimize then hide
+    ShowWindow(overlayWindow, SW_MINIMIZE);
+    ShowWindow(overlayWindow, SW_HIDE);
+    
+    // Méthode 5: Redimensionner à 0x0 / Method 5: Resize to 0x0
+    SetWindowPos(overlayWindow, HWND_BOTTOM, 0, 0, 0, 0, SWP_HIDEWINDOW | SWP_NOACTIVATE);
+    
+    // Programmer un overlay transparent dans 2 secondes comme solution de contournement / Schedule transparent overlay in 2 seconds as workaround
+    CreateThread(nullptr, 0, [](LPVOID param) -> DWORD {
+        Sleep(2000);
+        SimpleOverlay* overlay = (SimpleOverlay*)param;
+        if (overlay && overlay->emergencyTransparentMode) {
+            bool isFrench = IsSystemLanguageFrench();
+            std::wstring transparentMessage = isFrench ? 
+                L"[SimpleOverlay] Application d'overlay transparent de sécurité" :
+                L"[SimpleOverlay] Applying safety transparent overlay";
+            WriteToLog(transparentMessage);
+            
+            // Afficher un overlay complètement transparent pour "nettoyer" l'affichage / Show completely transparent overlay to "clean" display
+            overlay->ShowMessage(L"", 100); // Message vide, durée très courte / Empty message, very short duration
+            Sleep(200);
+            overlay->ForceHide();
+        }
+        return 0;
+    }, this, 0, nullptr);
+    
+    consecutiveFailedHides = 0;
+    
+    std::wstring completedMessage = isFrench ? 
+        L"[SimpleOverlay] Mode urgence terminé" :
+        L"[SimpleOverlay] Emergency mode completed";
+    WriteToLog(completedMessage);
+}
+
+void SimpleOverlay::CleanupOverlay() {
+    if (isInCleanup) return;  // Éviter les appels récursifs / Prevent recursive calls
+    isInCleanup = true;
+    
+    if (!overlayWindow) {
+        isInCleanup = false;
+        return;
+    }
+    
+    bool isFrench = IsSystemLanguageFrench();
+    
+    // 1. Désactiver temporairement le rendu / Temporarily disable rendering
+    SetWindowLongPtrW(overlayWindow, GWL_EXSTYLE, 
+                     GetWindowLongPtrW(overlayWindow, GWL_EXSTYLE) | WS_EX_TRANSPARENT);
+    
+    // 2. Masquer la fenêtre avec plusieurs méthodes / Hide window using multiple methods
+    ShowWindow(overlayWindow, SW_HIDE);
+    SetWindowPos(overlayWindow, HWND_BOTTOM, 0, 0, 0, 0, 
+                SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    
+    // 3. Vider le message et forcer un rafraîchissement / Clear message and force refresh
+    currentMessage.clear();
+    InvalidateRect(overlayWindow, nullptr, TRUE);
+    UpdateWindow(overlayWindow);
+    
+    // 4. Forcer un rafraîchissement du bureau / Force desktop refresh
+    RECT rect = {0, 0, 1, 1};
+    InvalidateRect(nullptr, &rect, TRUE);
+    UpdateWindow(GetDesktopWindow());
+    
+    // 5. Réinitialiser les états / Reset states
+    isVisible = false;
+    emergencyTransparentMode = false;
+    consecutiveFailedHides = 0;
+    
+    isInCleanup = false;
+    
+    std::wstring logMsg = isFrench ? 
+        L"[SimpleOverlay] Nettoyage de l'overlay effectué" :
+        L"[SimpleOverlay] Overlay cleanup completed";
+    WriteToLog(logMsg);
+}
+
+void SimpleOverlay::Shutdown() {
+    // The local overlay is disabled, so there's nothing to shut down.
+    // La superposition locale est désactivée, il n'y a rien à fermer.
 }
 
 DWORD WINAPI SimpleOverlay::UpdateThreadProc(LPVOID lpParam) {
@@ -205,7 +273,16 @@ LRESULT CALLBACK SimpleOverlay::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, 
     
     switch (uMsg) {
         case WM_PAINT: {
-            if (overlay && overlay->isVisible && !overlay->currentMessage.empty()) {
+            // Afficher seulement si g_SimpleOverlayEnabled est true OU si c'est un message forcé / Display only if g_SimpleOverlayEnabled is true OR if it's a forced message
+            bool shouldDisplay = overlay && overlay->isVisible && !overlay->currentMessage.empty() && !overlay->emergencyTransparentMode;
+            
+            // Permettre l'affichage des messages de confirmation START+GAUCHE même si désactivé / Allow START+LEFT confirmation messages even if disabled
+            bool isConfirmationMessage = (overlay->currentMessage == L"OVERLAY ACTIVÉ" || 
+                                        overlay->currentMessage == L"OVERLAY ENABLED" ||
+                                        overlay->currentMessage == L"OVERLAY DÉSACTIVÉ" || 
+                                        overlay->currentMessage == L"OVERLAY DISABLED");
+            
+            if (shouldDisplay && (IsSimpleOverlayGloballyEnabled() || isConfirmationMessage)) {
                 PAINTSTRUCT ps;
                 HDC hdc = BeginPaint(hwnd, &ps);
                 
@@ -311,7 +388,19 @@ LRESULT CALLBACK SimpleOverlay::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, 
             return 0;
             
         case WM_DESTROY:
+            // Nettoyer les ressources du timer
+            KillTimer(hwnd, 1);
             return 0;
+            
+        case WM_TIMER:
+            if (wParam == 1) {  // Notre timer de fermeture
+                KillTimer(hwnd, 1);  // Arrêter le timer
+                if (overlay) {
+                    overlay->CleanupOverlay();
+                }
+                return 0;
+            }
+            break;
             
         default:
             return DefWindowProc(hwnd, uMsg, wParam, lParam);
@@ -332,10 +421,25 @@ void ShowSimpleOverlayMessage(const std::wstring& message, DWORD duration) {
     }
 }
 
+void ShowSimpleOverlayMessageForced(const std::wstring& message, DWORD duration) {
+    // Cette fonction force l'affichage même si g_SimpleOverlayEnabled est false / This function forces display even if g_SimpleOverlayEnabled is false
+    SimpleOverlay* overlay = SimpleOverlay::GetInstance();
+    if (overlay) {
+        overlay->ShowMessage(message, duration);
+    }
+}
+
 void ForceHideSimpleOverlay() {
     SimpleOverlay* overlay = SimpleOverlay::GetInstance();
     if (overlay) {
         overlay->ForceHide();
+    }
+}
+
+void EmergencyHideSimpleOverlay() {
+    SimpleOverlay* overlay = SimpleOverlay::GetInstance();
+    if (overlay) {
+        overlay->EmergencyHide();
     }
 }
 

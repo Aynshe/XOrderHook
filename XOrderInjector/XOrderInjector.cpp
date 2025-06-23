@@ -1700,6 +1700,14 @@ int main(int argc, char* argv[]) {
             CloseHandle(hSnap);
         }
         
+        // Message loop to keep the overlay responsive
+        // Boucle de messages pour garder l'overlay réactif
+        MSG msg;
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+
         // Gestion de l'arrêt automatique
         if (initialDelayPassed && !hasActiveProcesses && hasGameBeenAttached) {
             if (!shutdownRequested) {
@@ -1712,7 +1720,7 @@ int main(int argc, char* argv[]) {
             shutdownRequested = false;
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(200)); // Vérification plus fréquente pour les manettes / More frequent checking for controllers
+        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // Reduced sleep time for better responsiveness / Temps de sommeil réduit pour une meilleure réactivité
     }
     
     // Nettoyage final / Final cleanup
