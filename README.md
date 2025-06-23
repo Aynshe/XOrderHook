@@ -4,6 +4,9 @@
 # 🎮 XOrder - XInput Controller dynamically reorder
 
 My need was to be able to force the XInput index on Windows games for my arcade cabinet controllers, which can randomly reverse, especially with single-player games that used the wrong arcade stick. With this hook, I can force the index in-game on the fly.
+Sometimes I use my arcade cabinet from another screen with additional controllers connected, and the issue of controllers being assigned to the wrong index becomes quite annoying. This solution allows me to avoid unplugging the arcade sticks from USB or relying on a smart home workaround. 
+I encounter the same issue when connecting through Moonlight using the Sunshine server.
+
 
 ## 📌 Overview  
 XOrder is a Windows-based system that dynamically reorganizes XInput controllers in games through hooking. This ensures that the first controller is assigned to index 0, and subsequent controllers are incremented accordingly.
