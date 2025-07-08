@@ -2,11 +2,18 @@
 
 # version 1.1.0
 
+# Available from the RetroBat store
+
+![image](https://github.com/user-attachments/assets/e5269136-4ca3-413b-bd05-ba4404602469)
+
+
 # 🎮 XOrder - XInput Controller dynamically reorder
 
 My need was to be able to force the XInput index on Windows games for my arcade cabinet controllers, which can randomly reverse, especially with single-player games that used the wrong arcade stick. With this hook, I can force the index in-game on the fly.
-Sometimes I use my arcade cabinet from another screen with additional controllers connected, and the issue of controllers being assigned to the wrong index becomes quite annoying. This solution allows me to avoid unplugging the arcade sticks from USB or relying on a smart home workaround. 
-I encounter the same issue when connecting through Moonlight using the Sunshine server.
+Sometimes I use my arcade cabinet from another screen with additional controllers connected, and the issue of controllers being assigned to the wrong index becomes quite annoying. This solution allows me to avoid unplugging the arcade sticks from USB or relying on a smart home workaround.
+
+I encounter the same issue when connecting through Moonlight using the Sunshine server. 
+* But with Moonlight, the behavior doesn't seem correct, with my latest version 1.1.0, I had a problem with one of the remote controllers not positioning. I'll do some tests comparing the old version to check if the behavior was the same before...
 
 
 ## 📌 Overview  
