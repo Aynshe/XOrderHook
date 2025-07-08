@@ -1756,11 +1756,26 @@ void RunUpdateScript(const std::string& archivePath) {
         scriptFile << "timeout /t 2 /nobreak > nul\n";
         scriptFile << "echo Extraction de la mise a jour...\n";
 
-        // Utiliser 7za pour décompresser. On met toute la commande entre guillemets correctement échappés.
-        std::string sevenZipCommand = "\"";
-        sevenZipCommand += baseDir + "\\7za.exe\" e \"";
-        sevenZipCommand += archivePath + "\" -o\"" + baseDir + "\\\" \"plugins\\XOrderHook\\*\" -aoa";
-        scriptFile << sevenZipCommand << "\n";
+        // Définir un dossier temporaire pour l'extraction
+        std::string tempUpdateDir = baseDir + "\\update_temp";
+        scriptFile << "rem Creation du dossier temporaire\n";
+        scriptFile << "mkdir \"" << tempUpdateDir << "\"\n";
+
+        // 1. Extraire les fichiers dans le dossier temporaire en conservant l'arborescence
+        scriptFile << "rem Extraction dans le dossier temporaire\n";
+        std::string extractCommand = "\"";
+        extractCommand += baseDir + "\\7za.exe\" x \"";
+        extractCommand += archivePath + "\" -o\"" + tempUpdateDir + "\" \"plugins/XOrderHook/*\" -aoa";
+        scriptFile << extractCommand << "\n";
+
+        // 2. Déplacer le contenu depuis le sous-dossier vers la racine de l'application
+        scriptFile << "rem Deplacement des fichiers a la racine\n";
+        std::string moveCommand = "robocopy \"" + tempUpdateDir + "\\plugins\\XOrderHook\" \"" + baseDir + "\" /E /MOVE";
+        scriptFile << moveCommand << "\n";
+
+        // 3. Nettoyer le dossier temporaire vide
+        scriptFile << "rem Nettoyage du dossier temporaire\n";
+        scriptFile << "rmdir /S /Q \"" << tempUpdateDir << "\"\n";
 
         scriptFile << "echo Nettoyage...\n";
         scriptFile << "del \"" << archivePath << "\"\n";

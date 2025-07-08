@@ -1,53 +1,77 @@
 ﻿==============================================
 XOrder - File Hash Report
 ==============================================
-Generated: 2025-06-23 22:11:33
+Generated: 2025-07-08 19:26:40
 Project: XOrder - XInput Controller Reorder Tool
 Website: https://github.com/Aynshe/XOrderHook
 ==============================================
 
+File: 7za.dll
+Platform: x64
+Size: 415744 bytes
+Modified: 2025-07-05 13:00:00
+SHA256: e3f5a27c18be4b8f03008acbd9040df80d56211f997c36b6e1f61869e5d68703
+MD5:    ca5ea94a2eb0a03ed2b7649c407b1429
+----------------------------------------------
+
+File: 7za.exe
+Platform: x64
+Size: 1329664 bytes
+Modified: 2025-07-05 13:00:00
+SHA256: 3261d62d2b4b428fca9a8867bb530043c90947c998374a7e138d06d5157ff0af
+MD5:    3fa21ac1eeb26bfc9459ee3a27f8dd40
+----------------------------------------------
+
+File: 7zxa.dll
+Platform: x64
+Size: 217600 bytes
+Modified: 2025-07-05 13:00:00
+SHA256: 4cf232be47d82a4dcc96b5b6eeabaea0b0f3c40302d53723ed35e58564dbe641
+MD5:    1dfe16d54ce822c48ac9e7ad0c7b9393
+----------------------------------------------
+
 File: SLD3.dll
 Platform: x64
-Size: 167424 bytes
-Modified: 2025-06-23 22:06:26
-SHA256: 7c0225c23442cc0270de2851a54dcc618d8d95266f904755edd43d83e4f6701f
-MD5:    ba20718c8310e0f717e0d0cded7692a1
+Size: 182784 bytes
+Modified: 2025-07-08 19:22:06
+SHA256: 131839018da191ca59e6409b5053a5456d00716175a58d2e53b881c6e448440a
+MD5:    86910b6d1235f2b5d88bc6bbc7cdb41f
 ----------------------------------------------
 
 File: XOrderHook.dll
 Platform: x64
-Size: 167424 bytes
-Modified: 2025-06-23 22:06:26
-SHA256: 7c0225c23442cc0270de2851a54dcc618d8d95266f904755edd43d83e4f6701f
-MD5:    ba20718c8310e0f717e0d0cded7692a1
+Size: 182784 bytes
+Modified: 2025-07-08 19:22:06
+SHA256: 131839018da191ca59e6409b5053a5456d00716175a58d2e53b881c6e448440a
+MD5:    86910b6d1235f2b5d88bc6bbc7cdb41f
 Description: XOrder Hook DLL - XInput Controller Reorder Library
 ----------------------------------------------
 
 File: XOrderHook_x86.dll
 Platform: x86
-Size: 151552 bytes
-Modified: 2025-06-23 22:06:39
-SHA256: b3ef36ef2a0b133cfbaf5cef81b9ef1ed0e4fa8613d9d88697e856a3d1c85b42
-MD5:    29f2d181ef996df4b1ce8131b563edf2
+Size: 167424 bytes
+Modified: 2025-07-08 19:22:23
+SHA256: 72a77a042c57392170755ab43b12d108ec4d9aa19b9e5a8ca4295f10c22b1279
+MD5:    3bce063a33011e8615da0d326f478808
 Description: XOrder Hook DLL - XInput Controller Reorder Library
 ----------------------------------------------
 
 File: XOrderInjector.exe
 Platform: x64
-Size: 156160 bytes
-Modified: 2025-06-23 22:06:24
-SHA256: 0ed863fad916bc7005520a8c31d336d41a06d5e8266ade0e4347f228add8e3a4
-MD5:    71d7f360644ae4ad60837195e3712e1c
+Size: 215040 bytes
+Modified: 2025-07-08 19:22:04
+SHA256: 4e8e90e558b7ca301d199361f2f6c4d6b6b1ee68753e9cfa66b00800eba8b4ca
+MD5:    781baeb3404b3e55ab42a3942298f90e
 Privileges: requireAdministrator
 Description: XOrder Injector - XInput Controller Reorder Service
 ----------------------------------------------
 
 File: XOrderInjector_x86.exe
 Platform: x86
-Size: 137216 bytes
-Modified: 2025-06-23 22:06:36
-SHA256: e9a8b56ecd996f1482cd3b3559b8d6fb2d994e1cc5eb629cc4f58b8cfbf97c55
-MD5:    2bc57acee15d823a790cd63c5f55e0ad
+Size: 196096 bytes
+Modified: 2025-07-08 19:22:21
+SHA256: 1d4fbfe7a55daf4e2d28625ee1563789c1cff3e62edeefd5bdc303c5b5e66360
+MD5:    9a3ed31d52981eda6f69b820dcfc164a
 Privileges: requireAdministrator
 Description: XOrder Injector - XInput Controller Reorder Service
 ----------------------------------------------
