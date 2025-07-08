@@ -70,5 +70,5 @@ public:
 // Fonctions utilitaires pour l'overlay de l'injecteur
 void InitializeInjectorOverlay();
 void ShutdownInjectorOverlay();
-void ShowInjectorOverlayMessage(const std::wstring& gameName, bool success);
+void ShowInjectorOverlayMessage(const std::wstring& message, bool success);
 void ForceHideInjectorOverlay(); // Fermeture immédiate de l'overlay

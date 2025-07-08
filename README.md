@@ -1,19 +1,12 @@
 # XOrderHook  ⚠️ *Important*: Hook injection may not work with all games due to anti-cheat protections or incompatible engines.
 
+# version 1.1.0
 
 # 🎮 XOrder - XInput Controller dynamically reorder
 
-My need was to be able to force the XInput index in Windows games for my arcade cabinet controllers, which can sometimes randomly swap—especially in single-player games that pick the wrong arcade stick. With this hook, I can force the index dynamically in-game.
-
-Sometimes I use my arcade cabinet from another screen with additional controllers connected, and the issue of controllers being assigned to the wrong index becomes quite annoying. This solution allows me to avoid unplugging arcade sticks from USB or relying on a smart home workaround.
-I encounter the same issue when connecting via Moonlight using the Sunshine server.
-
-The main goal was to be able to reassign a controller to player 1 on the fly, especially in games that don’t allow freely choosing from all connected devices.
-
-🎯 I’d also like to make the tool compatible with some games that seem to use DirectInput (DInput), but since I’m not a developer, I’ve had a hard time figuring it out.
-As a fallback, the DevReorder tool can handle this kind of setup, but it doesn’t allow dynamic reassignment In-Game.
-
-ℹ️ XInput version detection may sometimes be inaccurate. In such cases, you can force the XInput version manually for a specific game by editing the XOrderConfig.ini file.
+My need was to be able to force the XInput index on Windows games for my arcade cabinet controllers, which can randomly reverse, especially with single-player games that used the wrong arcade stick. With this hook, I can force the index in-game on the fly.
+Sometimes I use my arcade cabinet from another screen with additional controllers connected, and the issue of controllers being assigned to the wrong index becomes quite annoying. This solution allows me to avoid unplugging the arcade sticks from USB or relying on a smart home workaround. 
+I encounter the same issue when connecting through Moonlight using the Sunshine server.
 
 
 ## 📌 Overview  
@@ -46,7 +39,8 @@ XOrder is a Windows-based system that dynamically reorganizes XInput controllers
 ## 🎮 Controller Integration
 - ⬆️ **START + UP (3 seconds)**: Add current focused game to watch list *(must be done within 90 seconds after injection starts)*
 - ✅ **START (3 seconds)**: Activate controller on XInput index 0  
-- ♻️ **START + DOWN (3 seconds)**: Reset mapping to default  
+- ♻️ **START + DOWN (3 seconds)**: Reset mapping to default
+- 🔎 **START + LEFT (3 seconds)**: Force the xinput version, select with up/down then start to validate the recording. Restart the game for it to take effect.
 
 ## ⚙️ Configuration Management
 - 📝 INI-based configuration (`XOrderConfig.ini`)  
@@ -68,7 +62,8 @@ game3.exe "SysWOW64\xinput1_4"
 - 🏃 Run: Execute XOrderInjector.exe
 - ➕ Add Games: Use START + UP combo while focused on a game window  *(must be done within 90 seconds after injection starts)*
 - 🔢 Activate First Controller: Press START for 3 seconds to assign the controller to index 0. Others increment from 1 to 3.
-- 🔄 Reset Mapping: Press START + DOWN for 3 seconds to reset the mapping to default (confirmed by a strong vibration).
+- 🔄 Reset Mapping: Press START + BACK for 3 seconds to reset the mapping to default (confirmed by a strong vibration).
+- 🔎 If the xinput version is incorrect the remapping will not work. THen use START + LEFT (3 seconds)**: Force the xinput version, select with up/down then start to validate the recording. Restart the game for it to take effect.
 
 ## 🧠 Technical Details
 - 🧑‍💻 Languages: C++ with Windows API

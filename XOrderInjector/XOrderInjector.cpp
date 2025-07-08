@@ -10,15 +10,20 @@
 #include <chrono>
 #include <algorithm>
 #include <psapi.h> // Pour EnumProcessModules / For EnumProcessModules
-#include <algorithm>
-#include <vector>
 #include <codecvt>
 #include <locale>
 #include <winternl.h> // Pour NtQueryInformationProcess / For NtQueryInformationProcess
 #include <xinput.h>    // Pour la détection des manettes / For controller detection
 #include <map>
 #include <commctrl.h>  // Pour les contrôles Windows / For Windows controls
+#include <wininet.h> // Pour les requêtes HTTP / For HTTP requests
+
+#include "..\XOrderUtils.h"
 #include "InjectorOverlay.h"
+#include "..\XOrderIPC.h"
+
+#pragma comment(lib, "wininet.lib") // Lier avec la bibliothèque WinINet / Link with WinINet library
+
 
 #pragma comment(lib, "psapi.lib")
 #pragma comment(lib, "shlwapi.lib")
@@ -96,8 +101,15 @@ enum class ProcessArchitecture {
 
 // Déclarations anticipées (après l'énumération) / Forward declarations (after enumeration)
 std::wstring StringToWString(const std::string& str);
-bool InjectDLLSimple(DWORD pid, const std::string& dllPath);
-bool InjectDLLWithHelper(DWORD pid, const std::string& dllPath, ProcessArchitecture targetArch);
+std::string InjectDLLSimple(DWORD pid, const std::string& dllPath);
+std::string InjectDLLWithHelper(DWORD pid, const std::string& dllPath, ProcessArchitecture targetArch);
+std::string GetIniPath();
+void RemapXInputControllers(const std::string& iniPath);
+void ShowOverlayMessage(const wchar_t* message, DWORD duration, bool isSuccess);
+LRESULT CALLBACK IPCWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+bool CheckForUpdatesAndNotify(const std::string& currentVersionFilePath);
+void UpdateXInputVersionInConfig(const std::string& gameName, const std::wstring& newXInputVersion, ProcessArchitecture gameArch);
+std::string GetProcessFullPath(DWORD pid);
 
 // Fonction pour détecter l'architecture d'un processus / Function to detect process architecture
 ProcessArchitecture GetProcessArchitecture(DWORD processId) {
@@ -282,6 +294,21 @@ static std::map<DWORD, int> g_AddGameSecondsHeld;          // controllerIndex ->
 static std::map<DWORD, ULONGLONG> g_VibrationStopTime;     // controllerIndex -> time to stop vibration
 static std::map<DWORD, ULONGLONG> g_LastStartPressTime;    // controllerIndex -> time of last START press
 static bool g_NeedReloadConfig = false;                    // Indique qu'il faut recharger la configuration / Indicates that configuration needs to be reloaded
+static bool g_ReloadConfigRequested = false; // New flag for explicit config reload request
+
+// Variables for XInput version swapping
+static bool g_XInputVersionSwapMode = false;
+static int g_SelectedXInputVersionIndex = 0;
+static const std::vector<std::wstring> g_AvailableXInputVersions = {
+    L"xinput1_4.dll",
+    L"xinput1_3.dll",
+    L"xinput9_1_0.dll",
+    L"xinput1_2.dll",
+    L"xinput1_1.dll"
+};
+static DWORD g_XInputSwapModeController = -1;
+static std::map<DWORD, ULONGLONG> g_XInputVersionSwapComboPressTime;
+static std::map<DWORD, int> g_XInputVersionSwapSecondsHeld;
 
 // Constantes pour éviter l'interférence avec les commandes START / Constants to avoid interference with START commands
 const ULONGLONG COMBO_DELAY_MS = 500;  // Délai de grâce de 500ms après un appui sur START seul / 500ms grace delay after single START press
@@ -305,6 +332,55 @@ std::string GetForegroundProcessName() {
     
     CloseHandle(hProcess);
     return std::string(processName);
+}
+
+// Fonction pour lire l'architecture du processus de premier plan depuis XOrderPath.tmp
+ProcessArchitecture GetForegroundProcessArchitecture() {
+    HWND hwnd = GetForegroundWindow();
+    if (hwnd == NULL) {
+        std::cerr << "[GetForegroundProcessArchitecture] Erreur: Aucune fenêtre de premier plan." << std::endl;
+        return ProcessArchitecture::Unknown;
+    }
+
+    DWORD processId;
+    GetWindowThreadProcessId(hwnd, &processId);
+
+    std::string gamePath = GetProcessFullPath(processId);
+    if (gamePath.empty()) {
+        std::cerr << "[GetForegroundProcessArchitecture] Erreur: Impossible d'obtenir le chemin du processus de premier plan." << std::endl;
+        return ProcessArchitecture::Unknown;
+    }
+
+    size_t lastSlash = gamePath.find_last_of("\\/");
+    std::string gameDir = (lastSlash != std::string::npos) ? gamePath.substr(0, lastSlash) : "";
+
+    std::string tmpFilePath = gameDir + "\\XOrderPath.tmp";
+    std::ifstream tmpFile(tmpFilePath);
+    if (!tmpFile.is_open()) {
+        std::cerr << "[GetForegroundProcessArchitecture] Erreur: Impossible d'ouvrir XOrderPath.tmp dans le répertoire du jeu: " << tmpFilePath << std::endl;
+        return ProcessArchitecture::Unknown;
+    }
+
+    std::string line;
+    // Lire les 3 premières lignes (chemin, version XInput, PID)
+    for (int i = 0; i < 3; ++i) {
+        if (!std::getline(tmpFile, line)) {
+            std::cerr << "[GetForegroundProcessArchitecture] Erreur: Fichier XOrderPath.tmp trop court." << std::endl;
+            return ProcessArchitecture::Unknown;
+        }
+    }
+
+    // Lire la 4ème ligne (architecture)
+    if (std::getline(tmpFile, line)) {
+        if (line == "x86") {
+            return ProcessArchitecture::x86;
+        } else if (line == "x64") {
+            return ProcessArchitecture::x64;
+        }
+    }
+
+    std::cerr << "[GetForegroundProcessArchitecture] Erreur: Architecture non trouvée ou invalide dans XOrderPath.tmp." << std::endl;
+    return ProcessArchitecture::Unknown;
 }
 
 // Fonction pour ajouter un jeu à la liste [Games] dans le fichier de configuration / Function to add game to [Games] list in configuration file
@@ -345,12 +421,38 @@ bool AddGameToConfig(const std::string& gameName, const std::string& iniPath) {
             inGamesSection = false;
         }
         
-        // Vérifier si le jeu existe déjà / Check if game already exists
-        if (inGamesSection && line == gameName) {
-            gameExists = true;
-            std::cout << "[Debug] Jeu déjà existant trouvé: " << line << std::endl; // Existing game found
+        // Vérifier si le jeu existe déjà (uniquement dans la section [Games] et pour les lignes non vides/non commentaires)
+        if (inGamesSection && !line.empty() && line[0] != ';') {
+            std::string iniGameName = line;
+            
+            // Extraire le nom du jeu. La version de XInput est potentiellement après le nom, entre guillemets.
+            // Le nom du jeu est tout ce qui précède les guillemets.
+            size_t firstQuote = iniGameName.find('"');
+            if (firstQuote != std::string::npos) {
+                iniGameName = iniGameName.substr(0, firstQuote);
+                // Supprimer les espaces de fin / Trim trailing spaces
+                size_t lastChar = iniGameName.find_last_not_of(" \t");
+                if (std::string::npos != lastChar) {
+                    iniGameName.erase(lastChar + 1);
+                }
+            }
+            
+            // Nettoyer le nom (supprimer les espaces et .exe, convertir en minuscules)
+            std::string cleanIniGameName = CleanExeName(iniGameName);
+            std::string cleanGameName = CleanExeName(gameName);
+
+            std::cout << "[Debug] Comparing cleanIniGameName: '" << cleanIniGameName << "' with cleanGameName: '" << cleanGameName << "'" << std::endl;
+
+            if (!cleanIniGameName.empty() && cleanIniGameName == cleanGameName) {
+                gameExists = true;
+                std::cout << "[Debug] Jeu déjà existant trouvé: " << line << std::endl;
+                std::cout << "[Debug] Nom nettoyé: " << cleanIniGameName << std::endl;
+                // Sortir immédiatement si on trouve un doublon
+                configFile.close();
+                std::cout << "[AddGame] Le jeu existe déjà dans la configuration (match exact)" << std::endl;
+                return false;
+            }    
         }
-        
         lines.push_back(line);
     }
     configFile.close();
@@ -359,6 +461,7 @@ bool AddGameToConfig(const std::string& gameName, const std::string& iniPath) {
     
     if (gameExists) {
         std::cout << "[AddGame] Le jeu '" << gameName << "' existe déjà dans la configuration" << std::endl; // Game already exists in configuration
+        std::cout << "[Debug] AddGameToConfig returning false due to existing game." << std::endl; // Debug line
         return false;
     }
     
@@ -409,12 +512,20 @@ bool AddGameToConfig(const std::string& gameName, const std::string& iniPath) {
     return true;
 }
 
+static bool g_SimpleOverlayEnabled = true;
+
 // Fonction pour vérifier les manettes et détecter les combos / Function to check controllers and detect combos
-bool CheckControllerCombos(const std::string& iniPath) {
+bool CheckControllerCombos(const std::string& iniPath)
+{
+    bool comboDetectedInThisIteration = false;
     ULONGLONG currentTime = GetTickCount64();
-    
-    // Gérer l'arrêt des vibrations programmées / Handle scheduled vibration stops
-    for (auto it = g_VibrationStopTime.begin(); it != g_VibrationStopTime.end(); ) {
+
+    // Déclarations de variables pour la portée
+    bool gameAdded = false;
+    int currentSecond = 0;
+
+    // Gérer l'arrêt des vibrations programmées
+    for (auto it = g_VibrationStopTime.begin(); it != g_VibrationStopTime.end();) {
         if (currentTime >= it->second) {
             XINPUT_VIBRATION vibration = {0, 0};
             XInputSetState(it->first, &vibration);
@@ -423,134 +534,245 @@ bool CheckControllerCombos(const std::string& iniPath) {
             ++it;
         }
     }
-    
-    // Vérifier toutes les manettes / Check all controllers
+
     for (DWORD controllerIndex = 0; controllerIndex < XUSER_MAX_COUNT; ++controllerIndex) {
         XINPUT_STATE state;
         if (XInputGetState(controllerIndex, &state) == ERROR_SUCCESS) {
             bool startPressed = (state.Gamepad.wButtons & XINPUT_GAMEPAD_START);
             bool dpadUpPressed = (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP);
             bool dpadDownPressed = (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
-            
-            // Détecter si START est pressé seul (sans HAUT ni BAS) / Detect if START is pressed alone (without UP or DOWN)
-            if (startPressed && !dpadUpPressed && !dpadDownPressed) {
-                g_LastStartPressTime[controllerIndex] = currentTime;
-            }
-            
-            // Combo pour ajouter un jeu (START + HAUT) avec délai de grâce / Combo to add a game (START + UP) with grace delay
-            // Ne pas activer le combo si START a été pressé seul récemment / Don't activate combo if START was pressed alone recently
-            bool canActivateCombo = true;
-            if (g_LastStartPressTime.find(controllerIndex) != g_LastStartPressTime.end()) {
-                ULONGLONG timeSinceStartPress = currentTime - g_LastStartPressTime[controllerIndex];
-                if (timeSinceStartPress < COMBO_DELAY_MS) {
-                    canActivateCombo = false;
+            bool dpadLeftPressed = (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+
+            // Logique du mode de sélection de version XInput (prioritaire si déjà actif)
+            if (g_XInputVersionSwapMode && controllerIndex == g_XInputSwapModeController) {
+                ProcessArchitecture foregroundProcessArch = GetForegroundProcessArchitecture();
+                std::vector<std::wstring> filteredXInputVersions;
+
+                for (const auto& version : g_AvailableXInputVersions) {
+                    if (foregroundProcessArch == ProcessArchitecture::x86) {
+                        if (version.find(L"SysWOW64") != std::wstring::npos ||
+                            (version.find(L"xinput") == 0 && version.find(L"\\") == std::wstring::npos)) {
+                            filteredXInputVersions.push_back(version);
+                        }
+                    } else if (foregroundProcessArch == ProcessArchitecture::x64) {
+                        if (version.find(L"System32") != std::wstring::npos ||
+                            (version.find(L"xinput") == 0 && version.find(L"\\") == std::wstring::npos)) {
+                            filteredXInputVersions.push_back(version);
+                        }
+                    } else {
+                        filteredXInputVersions.push_back(version);
+                    }
+                }
+
+                if (filteredXInputVersions.empty()) {
+                    ShowInjectorOverlayMessage(GetLocalizedMessage(L"AUCUNE VERSION XINPUT COMPATIBLE", L"NO COMPATIBLE XINPUT VERSION"), false);
+                    g_XInputVersionSwapMode = false;
+                    g_XInputSwapModeController = -1;
+                    XINPUT_VIBRATION vibration = {30000, 30000};
+                    XInputSetState(controllerIndex, &vibration);
+                    g_VibrationStopTime[controllerIndex] = currentTime + 1000;
+                    return comboDetectedInThisIteration;
+                }
+
+                if (g_SelectedXInputVersionIndex >= filteredXInputVersions.size()) {
+                    g_SelectedXInputVersionIndex = 0;
+                }
+
+                if (dpadUpPressed) {
+                    g_SelectedXInputVersionIndex = (g_SelectedXInputVersionIndex > 0) ? g_SelectedXInputVersionIndex - 1 : filteredXInputVersions.size() - 1;
+                    std::wstring overlayMsg = L"XInput: " + filteredXInputVersions[g_SelectedXInputVersionIndex];
+                    ShowInjectorOverlayMessage(overlayMsg, true);
+                    Sleep(200); // Anti-rebond
+                } else if (dpadDownPressed) {
+                    g_SelectedXInputVersionIndex = (g_SelectedXInputVersionIndex < filteredXInputVersions.size() - 1) ? g_SelectedXInputVersionIndex + 1 : 0;
+                    std::wstring overlayMsg = L"XInput: " + filteredXInputVersions[g_SelectedXInputVersionIndex];
+                    ShowInjectorOverlayMessage(overlayMsg, true);
+                    Sleep(200); // Anti-rebond
+                } else if (startPressed) {
+                    UpdateXInputVersionInConfig(GetForegroundProcessName(), filteredXInputVersions[g_SelectedXInputVersionIndex], foregroundProcessArch);
+                    g_XInputVersionSwapMode = false;
+                    g_XInputSwapModeController = -1;
+                    std::cout << "[Action] Version XInput mise à jour dans la configuration." << std::endl;
+                    ShowInjectorOverlayMessage(GetLocalizedMessage(L"VERSION XINPUT MISE \u00C0 JOUR", L"XINPUT VERSION UPDATED"), true);
+                    XINPUT_VIBRATION vibration = {50000, 50000};
+                    XInputSetState(controllerIndex, &vibration);
+                    g_VibrationStopTime[controllerIndex] = currentTime + 500;
                 }
             }
-            
-            if (startPressed && dpadUpPressed && !dpadDownPressed && canActivateCombo) {
-                if (g_AddGameComboPressTime.find(controllerIndex) == g_AddGameComboPressTime.end()) {
-                    std::cout << "[Debug] Combo ADD GAME détecté sur la manette: " << controllerIndex << std::endl; // ADD GAME combo detected on controller: X
-                    g_AddGameComboPressTime[controllerIndex] = currentTime;
-                    g_AddGameSecondsHeld[controllerIndex] = 0;
+            // Combo pour le changement de version XInput (START + GAUCHE)
+            else if (startPressed && dpadLeftPressed && !dpadUpPressed && !dpadDownPressed) {
+                if (g_XInputVersionSwapComboPressTime.find(controllerIndex) == g_XInputVersionSwapComboPressTime.end()) {
+                    std::cout << "[Debug] Combo XINPUT SWAP détecté sur la manette: " << controllerIndex << std::endl;
+                    g_XInputVersionSwapComboPressTime[controllerIndex] = currentTime;
+                    g_XInputVersionSwapSecondsHeld[controllerIndex] = 0;
                 } else {
-                    ULONGLONG timeHeld = currentTime - g_AddGameComboPressTime[controllerIndex];
-                    int currentSecond = static_cast<int>(timeHeld / 1000);
-                    
-                    std::cout << "[Debug] Manette " << controllerIndex << " - Temps maintenu: " << timeHeld << "ms (" << currentSecond << "s)" << std::endl; // Controller X - Time held: Yms (Zs)
+                    ULONGLONG timeHeld = currentTime - g_XInputVersionSwapComboPressTime[controllerIndex];
+                    currentSecond = static_cast<int>(timeHeld / 1000);
 
-                    if (currentSecond >= 3 && g_AddGameSecondsHeld[controllerIndex] < 3) {
-                        std::cout << "[Debug] 3 secondes atteintes, tentative d'ajout du jeu..." << std::endl; // 3 seconds reached, attempting to add game...
-                        
-                        // Détecter le jeu en focus et l'ajouter / Detect focused game and add it
-                        std::string gameName = GetForegroundProcessName();
-                        std::cout << "[Debug] Jeu en focus détecté: '" << gameName << "'" << std::endl; // Focused game detected: 'X'
-                        
-                        if (!gameName.empty()) {
-                            std::cout << "[AddGame] Tentative d'ajout du jeu en focus: " << gameName << std::endl; // Attempting to add focused game: X
-                            if (AddGameToConfig(gameName, iniPath)) {
-                                std::cout << "[Action] Jeu '" << gameName << "' ajouté à la configuration!" << std::endl; // Game 'X' added to configuration!
-                                std::cout << "[Action] Configuration rechargée automatiquement." << std::endl; // Configuration reloaded automatically.
-                                
-                                // Afficher l'overlay de confirmation / Show confirmation overlay
-                                ShowInjectorOverlayMessage(StringToWString(gameName), true);
-                                
-                                // Vibration longue de confirmation du rechargement sur toutes les manettes / Long confirmation vibration for reload on all controllers
-                                std::cout << "[XOrderInjector] Envoi de la vibration de confirmation du rechargement..." << std::endl; // Sending reload confirmation vibration...
-                                ULONGLONG confirmationTime = GetTickCount64();
-                                for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
-                                    XINPUT_STATE state;
-                                    if (XInputGetState(i, &state) == ERROR_SUCCESS) {
-                                        // Vibration longue et forte pour confirmer le rechargement / Long and strong vibration to confirm reload
-                                        XINPUT_VIBRATION vibration = {50000, 50000}; // Vibration forte / Strong vibration
-                                        XInputSetState(i, &vibration);
-                                        g_VibrationStopTime[i] = confirmationTime + 1500; // 1.5 secondes / 1.5 seconds
-                                    }
-                                }
-                                
-                                // Marquer qu'il faut recharger la configuration / Mark that configuration needs to be reloaded
-                                g_NeedReloadConfig = true;
-                            } else {
-                                std::cout << "[AddGame] Échec de l'ajout du jeu (déjà existant ou erreur)" << std::endl; // Failed to add game (already exists or error)
-                                
-                                // Afficher l'overlay d'erreur / Show error overlay / Show error overlay
-                                ShowInjectorOverlayMessage(StringToWString(gameName), false);
-                                
-                                // Vibration d'erreur / Error vibration (1 longue pulsation) / Error vibration (1 long pulse)
-                                XINPUT_VIBRATION vibration = {65535, 65535};
-                                XInputSetState(controllerIndex, &vibration);
-                                g_VibrationStopTime[controllerIndex] = currentTime + 1000;
-                                
-                                // CORRECTION: Marquer que la configuration doit être rechargée même en cas d'échec / CORRECTION: Mark that configuration needs to be reloaded even on failure
-                                // pour que l'overlay se ferme correctement après 2 secondes / so that the overlay closes correctly after 2 seconds / so that the overlay closes correctly after 2 seconds
-                                g_NeedReloadConfig = true;
-                            }
-                        } else {
-                            std::cout << "[AddGame] Impossible de détecter le jeu en focus" << std::endl;
-                            
-                            // Afficher l'overlay d'erreur
-                            ShowInjectorOverlayMessage(L"Aucun jeu détecté", false);
-                            
-                            // Vibration d'erreur
-                            XINPUT_VIBRATION vibration = {65535, 65535};
-                            XInputSetState(controllerIndex, &vibration);
-                            g_VibrationStopTime[controllerIndex] = currentTime + 1000;
-                            
-                            // CORRECTION: Marquer que la configuration doit être rechargée même en cas d'échec / CORRECTION: Mark that configuration needs to be reloaded even on failure
-                            // pour que l'overlay se ferme correctement après 2 secondes
-                            g_NeedReloadConfig = true;
-                        }
-                        
-                        g_AddGameSecondsHeld[controllerIndex] = 3;
-                        g_AddGameComboPressTime.erase(controllerIndex);
-                    } else if (currentSecond > 0 && currentSecond < 3 && g_AddGameSecondsHeld[controllerIndex] < currentSecond) {
-                        std::cout << "[Debug] Vibration de progression - seconde " << currentSecond << std::endl;
-                        // Vibration de progression
-                        XINPUT_VIBRATION vibration = {20000, 20000}; // Vibration légère
+                    if (currentSecond >= 3 && g_XInputVersionSwapSecondsHeld[controllerIndex] < 3) {
+                        g_XInputVersionSwapMode = true;
+                        g_XInputSwapModeController = controllerIndex;
+                        std::cout << "[Action] Mode de sélection de version XInput activé." << std::endl;
+                        std::wstring overlayMsg = L"XInput: " + g_AvailableXInputVersions[g_SelectedXInputVersionIndex];
+                        ShowInjectorOverlayMessage(overlayMsg, true);
+
+                        XINPUT_VIBRATION vibration = {40000, 40000};
+                        XInputSetState(controllerIndex, &vibration);
+                        g_VibrationStopTime[controllerIndex] = currentTime + 300;
+
+                        g_XInputVersionSwapSecondsHeld[controllerIndex] = 3;
+                        g_XInputVersionSwapComboPressTime.erase(controllerIndex);
+                    } else if (currentSecond > 0 && currentSecond < 3 && g_XInputVersionSwapSecondsHeld[controllerIndex] < currentSecond) {
+                        XINPUT_VIBRATION vibration = {25000, 25000};
                         XInputSetState(controllerIndex, &vibration);
                         g_VibrationStopTime[controllerIndex] = currentTime + 100;
-                        g_AddGameSecondsHeld[controllerIndex] = currentSecond;
+                        g_XInputVersionSwapSecondsHeld[controllerIndex] = currentSecond;
+                    }
+                }
+            }
+            // Détecter si START est pressé seul (sans HAUT ni BAS)
+            else if (startPressed && !dpadUpPressed && !dpadDownPressed) {
+                g_LastStartPressTime[controllerIndex] = currentTime;
+            }
+            // Combo pour ajouter un jeu (START + HAUT) avec délai de grâce
+            else if (startPressed && dpadUpPressed && !dpadDownPressed) {
+                bool canActivateCombo = true;
+                if (g_LastStartPressTime.count(controllerIndex) && (currentTime - g_LastStartPressTime[controllerIndex]) < COMBO_DELAY_MS) {
+                    canActivateCombo = false;
+                }
+                if (canActivateCombo) {
+                    comboDetectedInThisIteration = true;
+                    if (g_AddGameComboPressTime.find(controllerIndex) == g_AddGameComboPressTime.end()) {
+                        std::cout << "[Debug] Combo ADD GAME détecté sur la manette: " << controllerIndex << std::endl;
+                        g_AddGameComboPressTime[controllerIndex] = currentTime;
+                        g_AddGameSecondsHeld[controllerIndex] = 0;
+                    } else {
+                        ULONGLONG timeHeld = currentTime - g_AddGameComboPressTime[controllerIndex];
+                        currentSecond = static_cast<int>(timeHeld / 1000);
+
+                        std::cout << "[Debug] Manette " << controllerIndex << " - Temps maintenu: " << timeHeld << "ms (" << currentSecond << "s)" << std::endl;
+
+                        if (currentSecond >= 3 && g_AddGameSecondsHeld[controllerIndex] < 3) {
+                            std::cout << "[Debug] 3 secondes atteintes, tentative d'ajout du jeu..." << std::endl;
+
+                            std::string gameName = GetForegroundProcessName();
+                            std::cout << "[Debug] Jeu en focus détecté: '" << gameName << "'" << std::endl;
+
+                            if (!gameName.empty()) {
+                                std::cout << "[Debug] g_NeedReloadConfig before AddGameToConfig: " << g_NeedReloadConfig << std::endl;
+                                gameAdded = false;
+                                std::cout << "[AddGame] Tentative d'ajout du jeu en focus: " << gameName << std::endl;
+
+                                bool gameExists = false;
+                                std::ifstream configCheck(iniPath);
+                                if (configCheck.is_open()) {
+                                    std::string line;
+                                    std::string cleanGameName = CleanExeName(gameName);
+                                    while (std::getline(configCheck, line)) {
+                                        if (!line.empty() && line[0] != ';' && line[0] != '[') {
+                                            std::string iniGameName = line.substr(0, line.find_first_of(" \t\r\n"));
+                                            if (CleanExeName(iniGameName) == cleanGameName) {
+                                                gameExists = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    configCheck.close();
+                                }
+
+                                if (gameExists) {
+                                    std::cout << "[AddGame] Le jeu existe déjà dans la configuration (vérification préalable)" << std::endl;
+                                    if (g_SimpleOverlayEnabled) {
+                                        std::wstring errorMsg = GetLocalizedMessage(L"Jeu d\u00E9j\u00E0 \u00E9xistant : ", L"Game already exists: ") + StringToWString(gameName);
+                                        ShowInjectorOverlayMessage(errorMsg, false);
+                                    }
+                                    XINPUT_VIBRATION vibration = {30000, 30000};
+                                    XInputSetState(controllerIndex, &vibration);
+                                    g_VibrationStopTime[controllerIndex] = currentTime + 1000;
+
+                                    g_AddGameComboPressTime.erase(controllerIndex);
+                                    g_AddGameSecondsHeld.erase(controllerIndex);
+                                    g_LastStartPressTime.erase(controllerIndex);
+
+                                    return true;
+                                }
+
+                                gameAdded = AddGameToConfig(gameName, iniPath);
+                                std::cout << "[DEBUG] AddGameToConfig a retourné: " << (gameAdded ? "true" : "false") << std::endl;
+
+                                if (gameAdded) {
+                                    std::cout << "[DEBUG] Traitement du succès de l'ajout" << std::endl;
+                                    std::cout << "[Action] Jeu '" << gameName << "' ajouté à la configuration!" << std::endl;
+                                    std::cout << "[Action] Configuration rechargée automatiquement." << std::endl;
+
+                                    if (g_SimpleOverlayEnabled) {
+                                        std::wstring successMsg = GetLocalizedMessage(L"Jeu ajout\u00E9 : ", L"Game added: ") + StringToWString(gameName);
+                                        ShowInjectorOverlayMessage(successMsg, true);
+                                    }
+
+                                    ULONGLONG confirmationTime = GetTickCount64();
+                                    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+                                        XINPUT_VIBRATION vibration = {30000, 30000};
+                                        XInputSetState(i, &vibration);
+                                        g_VibrationStopTime[i] = confirmationTime + 500;
+                                    }
+                                    g_ReloadConfigRequested = true;
+                                    std::cout << "[Debug] Configuration marquée pour rechargement" << std::endl;
+                                } else {
+                                    std::cout << "[AddGame] Le jeu existe déjà dans la configuration, arrêt de la tentative d'ajout" << std::endl;
+
+                                    if (g_SimpleOverlayEnabled) {
+                                        std::wstring errorMsg = GetLocalizedMessage(L"Jeu d\u00E9j\u00E0 \u00E9xistant : ", L"Game already exists: ") + StringToWString(gameName);
+                                        ShowInjectorOverlayMessage(errorMsg, false);
+                                    }
+
+                                    XINPUT_VIBRATION vibration = {30000, 30000};
+                                    XInputSetState(controllerIndex, &vibration);
+                                    g_VibrationStopTime[controllerIndex] = currentTime + 1000;
+
+                                    g_AddGameComboPressTime.erase(controllerIndex);
+                                    g_AddGameSecondsHeld.erase(controllerIndex);
+                                    g_LastStartPressTime.erase(controllerIndex);
+
+                                    std::cout << "[DEBUG] Sortie de CheckControllerCombos après détection de doublon" << std::endl;
+                                    return true;
+                                }
+                            } else { // gameName.empty() est vrai
+                                std::cout << "[AddGame] Impossible de détecter le jeu en focus" << std::endl;
+
+                                if (g_SimpleOverlayEnabled) {
+                                    ShowInjectorOverlayMessage(L"NO GAME DETECTED", false);
+                                }
+
+                                XINPUT_VIBRATION vibration = {30000, 30000};
+                                XInputSetState(controllerIndex, &vibration);
+                                g_VibrationStopTime[controllerIndex] = currentTime + 1000;
+                            }
+                            std::cout << "[DEBUG] Vérification finale de gameAdded: " << (gameAdded ? "true" : "false") << std::endl;
+                            if (gameAdded) {
+                                std::cout << "[Debug] g_NeedReloadConfig after AddGameToConfig: " << g_NeedReloadConfig << std::endl;
+                                g_AddGameSecondsHeld[controllerIndex] = 3;
+                                g_AddGameComboPressTime.erase(controllerIndex);
+                            } else {
+                                std::cout << "[DEBUG] Aucune mise à jour de l'état car le jeu n'a pas été ajouté" << std::endl;
+                            }
+                        }
                     }
                 }
             } else {
-                // Les boutons sont relâchés, on réinitialise les timers pour cette manette
                 g_AddGameComboPressTime.erase(controllerIndex);
                 g_AddGameSecondsHeld.erase(controllerIndex);
-                
-                // Nettoyer les anciens timestamps START (plus de 2 secondes)
-                if (g_LastStartPressTime.find(controllerIndex) != g_LastStartPressTime.end()) {
-                    ULONGLONG timeSinceStartPress = currentTime - g_LastStartPressTime[controllerIndex];
-                    if (timeSinceStartPress > 2000) { // 2 secondes
-                        g_LastStartPressTime.erase(controllerIndex);
-                    }
+                g_XInputVersionSwapComboPressTime.erase(controllerIndex);
+                g_XInputVersionSwapSecondsHeld.erase(controllerIndex);
+
+                if (g_LastStartPressTime.count(controllerIndex) && (currentTime - g_LastStartPressTime[controllerIndex]) > 2000) {
+                    g_LastStartPressTime.erase(controllerIndex);
                 }
             }
         }
     }
-    
-    return g_NeedReloadConfig;
+    return comboDetectedInThisIteration;
 }
-
-// Structure pour stocker les informations d'un jeu / Structure to store game information
 struct GameInfo {
     std::string exeName;
     std::string forcedXInputVersion; // Version XInput forcée (vide si non spécifiée) / Forced XInput version (empty if not specified)
@@ -787,65 +1009,74 @@ DWORD WINAPI Loader(LPVOID pData) {
 void LoaderEnd() {}
 
 // Fonction d'injection simple via LoadLibrary (pour cross-architecture) / Simple injection function via LoadLibrary (for cross-architecture)
-bool InjectDLLSimple(DWORD pid, const std::string& dllPath) {
+std::string InjectDLLSimple(DWORD pid, const std::string& dllPath) {
+    std::string errorMsg; // Declare errorMsg here
     std::cout << "[Simple Injector] Injection via LoadLibrary..." << std::endl;
     std::cout << "[Simple Injector] DLL: " << dllPath << std::endl;
     
     // Vérifier que la DLL existe / Check that DLL exists
     std::ifstream dllFile(dllPath);
     if (!dllFile.good()) {
-        std::cerr << "[Simple Injector] Erreur: DLL non trouvée: " << dllPath << std::endl; // Error: DLL not found
-        return false;
+        errorMsg = "FAILED: DLL non trouvée: " + dllPath + " (Code: " + std::to_string(GetLastError()) + ")";
+        std::cerr << "[Simple Injector] Erreur: " << errorMsg << std::endl;
+        return errorMsg;
     }
     dllFile.close();
     
     // Convertir en chemin absolu si nécessaire / Convert to absolute path if necessary
     char absolutePath[MAX_PATH];
     if (!GetFullPathNameA(dllPath.c_str(), MAX_PATH, absolutePath, NULL)) {
-        std::cerr << "[Simple Injector] Erreur: GetFullPathName a échoué: " << GetLastError() << std::endl; // Error: GetFullPathName failed
-        return false;
+        errorMsg = "FAILED: GetFullPathName a échoué (Code: " + std::to_string(GetLastError()) + ")";
+        std::cerr << "[Simple Injector] Erreur: " << errorMsg << std::endl;
+        return errorMsg;
     }
     std::string fullDllPath(absolutePath);
     std::cout << "[Simple Injector] Chemin absolu: " << fullDllPath << std::endl; // Absolute path
     
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (!hProcess) {
-        std::cerr << "[Simple Injector] Erreur: OpenProcess a échoué: " << GetLastError() << std::endl; // Error: OpenProcess failed
-        return false;
+        errorMsg = "FAILED: OpenProcess a échoué (Code: " + std::to_string(GetLastError()) + ")";
+        std::cerr << "[Simple Injector] Erreur: " << errorMsg << std::endl;
+        CloseHandle(hProcess);
+        return errorMsg;
     }
 
     // Allouer de la mémoire pour le chemin de la DLL / Allocate memory for DLL path
     SIZE_T pathLen = fullDllPath.length() + 1;
     LPVOID pRemotePath = VirtualAllocEx(hProcess, NULL, pathLen, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!pRemotePath) {
-        std::cerr << "[Simple Injector] Erreur: VirtualAllocEx a échoué: " << GetLastError() << std::endl; // Error: VirtualAllocEx failed
+        errorMsg = "FAILED: VirtualAllocEx a échoué (Code: " + std::to_string(GetLastError()) + ")";
+        std::cerr << "[Simple Injector] Erreur: " << errorMsg << std::endl;
         CloseHandle(hProcess);
-        return false;
+        return errorMsg;
     }
 
     // Écrire le chemin de la DLL dans le processus cible / Write DLL path to target process
     if (!WriteProcessMemory(hProcess, pRemotePath, fullDllPath.c_str(), pathLen, NULL)) {
-        std::cerr << "[Simple Injector] Erreur: WriteProcessMemory a échoué: " << GetLastError() << std::endl; // Error: WriteProcessMemory failed
+        errorMsg = "FAILED: WriteProcessMemory a échoué (Code: " + std::to_string(GetLastError()) + ")";
+        std::cerr << "[Simple Injector] Erreur: " << errorMsg << std::endl;
         VirtualFreeEx(hProcess, pRemotePath, 0, MEM_RELEASE);
         CloseHandle(hProcess);
-        return false;
+        return errorMsg;
     }
 
     // Obtenir l'adresse de LoadLibraryA / Get LoadLibraryA address
     HMODULE hKernel32 = GetModuleHandleA("kernel32.dll");
     if (!hKernel32) {
-        std::cerr << "[Simple Injector] Erreur: GetModuleHandle(kernel32) a échoué" << std::endl; // Error: GetModuleHandle(kernel32) failed
+        errorMsg = "FAILED: GetModuleHandle(kernel32) a échoué (Code: " + std::to_string(GetLastError()) + ")";
+        std::cerr << "[Simple Injector] Erreur: " << errorMsg << std::endl;
         VirtualFreeEx(hProcess, pRemotePath, 0, MEM_RELEASE);
         CloseHandle(hProcess);
-        return false;
+        return errorMsg;
     }
 
     LPVOID pLoadLibrary = GetProcAddress(hKernel32, "LoadLibraryA");
     if (!pLoadLibrary) {
-        std::cerr << "[Simple Injector] Erreur: GetProcAddress(LoadLibraryA) a échoué" << std::endl; // Error: GetProcAddress(LoadLibraryA) failed
+        errorMsg = "FAILED: GetProcAddress(LoadLibraryA) a échoué (Code: " + std::to_string(GetLastError()) + ")";
+        std::cerr << "[Simple Injector] Erreur: " << errorMsg << std::endl;
         VirtualFreeEx(hProcess, pRemotePath, 0, MEM_RELEASE);
         CloseHandle(hProcess);
-        return false;
+        return errorMsg;
     }
 
     std::cout << "[Simple Injector] Création du thread distant..." << std::endl; // Creating remote thread...
@@ -854,23 +1085,26 @@ bool InjectDLLSimple(DWORD pid, const std::string& dllPath) {
     HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, 
         (LPTHREAD_START_ROUTINE)pLoadLibrary, pRemotePath, 0, NULL);
     if (!hThread) {
-        std::cerr << "[Simple Injector] Erreur: CreateRemoteThread a échoué: " << GetLastError() << std::endl; // Error: CreateRemoteThread failed
+        errorMsg = "FAILED: CreateRemoteThread a échoué (Code: " + std::to_string(GetLastError()) + ")";
+        std::cerr << "[Simple Injector] Erreur: " << errorMsg << std::endl;
         VirtualFreeEx(hProcess, pRemotePath, 0, MEM_RELEASE);
         CloseHandle(hProcess);
-        return false;
+        return errorMsg;
     }
 
     // Attendre que le thread se termine / Wait for thread to finish
     std::cout << "[Simple Injector] Attente de la fin du thread..." << std::endl; // Waiting for thread to finish...
     DWORD waitResult = WaitForSingleObject(hThread, 15000); // 15 secondes max / 15 seconds max
     if (waitResult != WAIT_OBJECT_0) {
-        std::cerr << "[Simple Injector] Avertissement: Le thread d'injection n'a pas terminé dans les temps (résultat: " << waitResult << ")" << std::endl; // Warning: Injection thread didn't finish in time
+        errorMsg = "FAILED: Le thread d'injection n'a pas terminé dans les temps (Résultat: " + std::to_string(waitResult) + ")";
+        std::cerr << "[Simple Injector] Avertissement: " << errorMsg << std::endl;
+        // On ne retourne pas d'erreur ici, car l'injection a pu réussir malgré le timeout
     }
 
     // Vérifier le code de retour du thread / Check thread return code
     DWORD threadExitCode = 0;
     if (GetExitCodeThread(hThread, &threadExitCode)) {
-        std::cout << "[Simple Injector] Code de retour du thread: 0x" << std::hex << threadExitCode << std::dec << std::endl; // Thread return code
+        std::cout << "[Simple Injector] Code de retour du thread: 0x" << std::hex << threadExitCode << std::dec << ")" << std::endl; // Thread return code
         if (threadExitCode == 0) {
             std::cerr << "[Simple Injector] Erreur: LoadLibrary a retourné NULL - DLL non chargée" << std::endl; // Error: LoadLibrary returned NULL - DLL not loaded
             
@@ -881,23 +1115,28 @@ bool InjectDLLSimple(DWORD pid, const std::string& dllPath) {
             CloseHandle(hThread);
             VirtualFreeEx(hProcess, pRemotePath, 0, MEM_RELEASE);
             CloseHandle(hProcess);
-            return false;
+            return errorMsg;
         }
     } else {
-        std::cerr << "[Simple Injector] Erreur: GetExitCodeThread a échoué: " << GetLastError() << std::endl; // Error: GetExitCodeThread failed
+        errorMsg = "FAILED: GetExitCodeThread a échoué (Code: " + std::to_string(GetLastError()) + ")";
+        std::cerr << "[Simple Injector] Erreur: " << errorMsg << std::endl;
+        CloseHandle(hThread);
+        VirtualFreeEx(hProcess, pRemotePath, 0, MEM_RELEASE);
+        CloseHandle(hProcess);
+        return errorMsg;
     }
 
-    std::cout << "[Simple Injector] Injection terminée avec succès (HMODULE: 0x" << std::hex << threadExitCode << std::dec << ")" << std::endl; // Injection completed successfully
+    std::cout << "[Simple Injector] Injection terminée avec succès (HMODULE: 0x" << std::hex << threadExitCode << std::dec << ")" << std::endl;
 
     // Nettoyage / Cleanup
     CloseHandle(hThread);
     VirtualFreeEx(hProcess, pRemotePath, 0, MEM_RELEASE);
     CloseHandle(hProcess);
-    return true;
+    return "SUCCESS";
 }
 
 // Fonction d'injection avec processus auxiliaire (pour cross-architecture) / Injection function with helper process (for cross-architecture)
-bool InjectDLLWithHelper(DWORD pid, const std::string& dllPath, ProcessArchitecture targetArch) {
+std::string InjectDLLWithHelper(DWORD pid, const std::string& dllPath, ProcessArchitecture targetArch) {
     std::cout << "[Helper Injector] Injection via processus auxiliaire..." << std::endl; // Injection via helper process...
     
     // Obtenir le chemin de l'exécutable actuel / Get current executable path
@@ -914,7 +1153,7 @@ bool InjectDLLWithHelper(DWORD pid, const std::string& dllPath, ProcessArchitect
     if (!test.good()) {
         std::cout << "[Helper Injector] XOrderInjector_x86.exe non trouvé dans " << currentDir << std::endl; // XOrderInjector_x86.exe not found in
         std::cout << "[Helper Injector] Fallback vers l'injection directe..." << std::endl; // Fallback to direct injection...
-        return InjectDLLSimple(pid, dllPath);
+        return InjectDLLSimple(pid, dllPath); // Fallback and return its result
     }
     test.close();
     
@@ -933,6 +1172,8 @@ bool InjectDLLWithHelper(DWORD pid, const std::string& dllPath, ProcessArchitect
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
     
+    std::string injectionResult = "FAILED: Unknown error during helper process execution."; // Default error message
+
     if (CreateProcessA(NULL, const_cast<char*>(command.c_str()), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
         // Attendre que le processus se termine (max 15 secondes) / Wait for process to finish (max 15 seconds)
         DWORD waitResult = WaitForSingleObject(pi.hProcess, 15000);
@@ -949,30 +1190,30 @@ bool InjectDLLWithHelper(DWORD pid, const std::string& dllPath, ProcessArchitect
             // Lire le résultat du fichier temporaire / Read result from temporary file
             std::ifstream resultFile(tempFile);
             if (resultFile.is_open()) {
-                std::string result;
-                std::getline(resultFile, result);
+                std::getline(resultFile, injectionResult); // Read the detailed result
                 resultFile.close();
-                DeleteFileA(tempFile.c_str()); // Nettoyer le fichier temporaire / Clean up temporary file
-                
-                if (result == "SUCCESS") {
-                    std::cout << "[Helper Injector] [+] Injection reussie via processus auxiliaire x86" << std::endl; // Injection successful via x86 helper process
-                    return true;
-                } else {
-                    std::cout << "[Helper Injector] [-] Echec rapporte par le processus auxiliaire: " << result << std::endl; // Failure reported by helper process
-                }
             } else {
-                std::cout << "[Helper Injector] [-] Impossible de lire le fichier de resultat" << std::endl; // Unable to read result file
+                injectionResult = "FAILED: Impossible de lire le fichier de resultat."; // Unable to read result file
+                std::cout << "[Helper Injector] [-] " << injectionResult << std::endl;
             }
         } else {
-            std::cout << "[Helper Injector] [-] Le processus auxiliaire a echoue ou timeout" << std::endl; // Helper process failed or timed out
+            injectionResult = "FAILED: Le processus auxiliaire a echoue ou timeout (Code: " + std::to_string(exitCode) + ", WaitResult: " + std::to_string(waitResult) + ").";
+            std::cout << "[Helper Injector] [-] " << injectionResult << std::endl;
         }
     } else {
-        std::cout << "[Helper Injector] [-] Impossible de lancer le processus auxiliaire: " << GetLastError() << std::endl; // Unable to launch helper process
+        injectionResult = "FAILED: Impossible de lancer le processus auxiliaire (Code: " + std::to_string(GetLastError()) + ").";
+        std::cout << "[Helper Injector] [-] " << injectionResult << std::endl;
     }
     
+    // Nettoyer le fichier temporaire, qu'il y ait eu succès ou échec
+    DeleteFileA(tempFile.c_str()); 
+
     // Si le processus auxiliaire échoue, essayer l'injection directe en dernier recours / If helper process fails, try direct injection as last resort
-    std::cout << "[Helper Injector] Tentative d'injection directe en dernier recours..." << std::endl; // Attempting direct injection as last resort...
-    return InjectDLLSimple(pid, dllPath);
+    if (injectionResult.rfind("FAILED", 0) == 0) { // Check if it starts with "FAILED"
+        std::cout << "[Helper Injector] Tentative d'injection directe en dernier recours..." << std::endl; // Attempting direct injection as last resort...
+        return InjectDLLSimple(pid, dllPath);
+    }
+    return injectionResult;
 }
 
 bool InjectDLL(DWORD pid, const std::string& baseDllPath, ProcessArchitecture targetArch) {
@@ -1248,8 +1489,72 @@ std::string GetProcessFullPath(DWORD pid) {
     return std::string(processPath);
 }
 
+// Fonction pour déployer les DLLs proxy (dinput.dll, dinput8.dll) / Function to deploy proxy DLLs (dinput.dll, dinput8.dll)
+void DeployProxyDlls(DWORD pid, ProcessArchitecture targetArch) {
+    std::cout << "[Proxy] Tentative de déploiement des DLLs proxy pour le PID: " << pid << std::endl;
+
+    // 1. Obtenir le répertoire de l'injecteur
+    char modulePath[MAX_PATH] = {0};
+    GetModuleFileNameA(NULL, modulePath, MAX_PATH);
+    std::string injectorDir = modulePath;
+    injectorDir = injectorDir.substr(0, injectorDir.find_last_of("\\/"));
+
+    // 2. Obtenir le répertoire du jeu
+    std::string gamePath = GetProcessFullPath(pid);
+    if (gamePath.empty()) {
+        std::cerr << "[Proxy] ERREUR: Impossible d'obtenir le chemin du processus cible." << std::endl;
+        return;
+    }
+    std::string gameDir = gamePath.substr(0, gamePath.find_last_of("\\/"));
+    std::wcout << L"[Proxy] Répertoire du jeu détecté: " << StringToWString(gameDir) << std::endl;
+
+    // 3. Déterminer le dossier source des DLLs en fonction de l'architecture
+    std::string archSubFolder;
+    if (targetArch == ProcessArchitecture::x64) {
+        archSubFolder = "x64";
+    } else if (targetArch == ProcessArchitecture::x86) {
+        archSubFolder = "x86";
+    } else {
+        std::cerr << "[Proxy] ERREUR: Architecture de processus inconnue, impossible de déployer les DLLs proxy." << std::endl;
+        return;
+    }
+
+    std::string sourceDir = injectorDir + "\\" + archSubFolder;
+    std::wcout << L"[Proxy] Répertoire source des DLLs proxy: " << StringToWString(sourceDir) << std::endl;
+
+    // 4. Définir les paires de fichiers source/destination
+    std::map<std::string, std::string> proxyFiles;
+    proxyFiles["DInputHook.dll"] = "dinput.dll";
+    proxyFiles["DInput8Hook.dll"] = "dinput8.dll";
+
+    // 5. Copier chaque DLL si elle n'existe pas déjà
+    for (const auto& pair : proxyFiles) {
+        std::wstring sourceFile = StringToWString(sourceDir + "\\" + pair.first);
+        std::wstring destFile = StringToWString(gameDir + "\\" + pair.second);
+
+        // Vérifier si la DLL source existe
+        if (!FileExists(sourceFile)) {
+            std::wcerr << L"[Proxy] AVERTISSEMENT: La DLL source n'a pas été trouvée: " << sourceFile << std::endl;
+            continue;
+        }
+
+        // Vérifier si la DLL de destination existe déjà
+        if (FileExists(destFile)) {
+            std::wcout << L"[Proxy] La DLL \"" << StringToWString(pair.second) << L"\" existe déjà dans le répertoire du jeu. Ignoré." << std::endl;
+        } else {
+            std::wcout << L"[Proxy] Copie de \"" << StringToWString(pair.first) << L"\" vers \"" << StringToWString(pair.second) << L"\"…" << std::endl;
+            if (CopyFileW(sourceFile.c_str(), destFile.c_str(), FALSE)) {
+                std::wcout << L"[Proxy] Copie réussie." << std::endl;
+            } else {
+                std::wcerr << L"[Proxy] ERREUR: La copie a échoué. Code d'erreur: " << GetLastError() << std::endl;
+            }
+        }
+    }
+}
+
 // Fonction utilitaire pour convertir une chaîne en wstring / Utility function to convert string to wstring
 std::wstring StringToWString(const std::string& str) {
+
     if (str.empty()) return L"";
     int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
     std::wstring wstrTo(size_needed, 0);
@@ -1264,6 +1569,17 @@ std::string WStringToString(const std::wstring& wstr) {
     std::string strTo(size_needed, 0);
     WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
     return strTo;
+}
+
+// Fonction utilitaire pour supprimer les espaces de début et de fin / Utility function to trim leading/trailing whitespace
+std::string trim(const std::string& str) {
+    const std::string whitespace = " \t\n\r\f\v";
+    size_t first = str.find_first_not_of(whitespace);
+    if (std::string::npos == first) {
+        return str;
+    }
+    size_t last = str.find_last_not_of(whitespace);
+    return str.substr(first, (last - first + 1));
 }
 
 // Fonction utilitaire pour créer un mutex global / Utility function to create global mutex
@@ -1287,7 +1603,440 @@ bool IsAnotherInstanceRunning() {
     return false;
 }
 
+// Fonction pour obtenir le chemin du fichier de configuration / Function to get configuration file path
+std::string GetIniPath() {
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    PathRemoveFileSpecA(exePath);
+    strcat_s(exePath, "\\XOrderConfig.ini");
+    return std::string(exePath);
+}
+
+// Fonction pour remapper les manettes XInput / Function to remap XInput controllers
+void RemapXInputControllers(const std::string& iniPath) {
+    // In a real implementation, this would call the XInput remapping logic.
+    std::cout << "[XOrderInjector] Remapping controllers..." << std::endl;
+
+    // Find the first active controller and move it to index 0
+    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+        XINPUT_STATE state;
+        if (XInputGetState(i, &state) == ERROR_SUCCESS) {
+            // Controller found at index i, move it to index 0
+            std::cout << "[XOrderInjector] Controller found at index " << i << ", moving to index 0." << std::endl;
+            // This is a simplified example. A real implementation would involve more complex logic
+            // to swap controller indices, which might not be directly possible with XInput.
+            // The hook is responsible for re-interpreting the controller indices.
+            break;
+        }
+    }
+}
+
+// Fonction pour afficher un message d'overlay / Function to show overlay message
+void ShowOverlayMessage(const wchar_t* message, DWORD duration, bool isSuccess) {
+    InjectorOverlay* overlay = InjectorOverlay::GetInstance();
+    if (overlay) {
+        // S'assurer que l'overlay est initialisé / Ensure overlay is initialized
+        if (!overlay->IsInitialized()) {
+            overlay->Initialize();
+        }
+        overlay->ShowMessage(message, duration, isSuccess);
+    }
+}
+
+// Procédure de fenêtre pour le serveur IPC / Window procedure for IPC server
+LRESULT CALLBACK IPCWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+        case WM_COPYDATA:
+        {
+            COPYDATASTRUCT* pcds = (COPYDATASTRUCT*)lParam;
+            if (pcds->dwData == XORDER_IPC_MESSAGE_ID && pcds->lpData) {
+                XOrderIPCMessage* ipcMsg = (XOrderIPCMessage*)pcds->lpData;
+                switch (ipcMsg->command) {
+                    case CMD_OVERLAY:
+                    {
+                        std::wcout << L"[XOrderInjector] Message d'overlay reçu du hook: " << ipcMsg->data << std::endl;
+                        std::wstring receivedWMessage = ipcMsg->data;
+                        std::string receivedMessage = WStringToString(receivedWMessage); // Convert to std::string
+
+                        // Ignore specific messages from the hook that are handled by the injector
+                        if (receivedMessage == "JEU AJOUT\u00C9" || receivedMessage == "GAME ADDED") { // Compare with std::string literals
+                            std::wcout << L"[XOrderInjector] Ignored duplicate game added message from hook." << std::endl;
+                            break; // Ignore this message
+                        }
+                        ShowOverlayMessage(ipcMsg->data, 2000, true);
+                        break;
+                    }
+                    case CMD_REMAP_CONTROLLERS_TRIGGER:
+                    {
+                        std::wcout << L"[XOrderInjector] Trigger de remappage reçu du hook." << std::endl; // Remap trigger received from hook.
+                        RemapXInputControllers(GetIniPath());
+                        const wchar_t* remapMsg = g_UseFrenchLanguage ? L"Manettes remappées !" : L"Controllers remapped!";
+                        ShowOverlayMessage(remapMsg, 3000, true);
+                        break;
+                    }
+                    default:
+                        std::wcout << L"[XOrderInjector] Commande IPC inconnue reçue: " << ipcMsg->command << std::endl; // Unknown IPC command received
+                        break;
+                }
+                return 1; // Indiquer que le message a été traité / Indicate message was processed
+            }
+        }
+        break;
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            break;
+        default:
+            return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+// Nom de la classe de fenêtre pour le serveur IPC
+#define XORDER_IPC_WNDCLASS_NAME L"XOrderIPCServerClass"
+
+// Fonction pour comparer les versions (ex: "1.0.2" vs "1.0.3")
+// Retourne true si newVersion est plus récente que currentVersion
+bool IsNewVersionAvailable(const std::string& currentVersion, const std::string& newVersion) {
+    // Simple comparaison de chaînes pour les versions X.Y.Z
+    // Cela fonctionne si les numéros de version sont toujours positifs et sans zéros non significatifs
+    // Pour une comparaison plus robuste, il faudrait parser les numéros et les comparer un par un
+    return newVersion > currentVersion;
+}
+
+// Fonction pour télécharger un fichier depuis une URL
+bool DownloadFile(const std::string& url, const std::string& outputPath) {
+    HINTERNET hInternet = InternetOpenA("XOrderInjector", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+    if (!hInternet) {
+        std::cerr << GetLocalizedMessage("[Update] InternetOpenA a \u00E9chou\u00E9: ", "[Update] InternetOpenA failed: ") << GetLastError() << std::endl;
+        return false;
+    }
+
+    HINTERNET hConnect = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, INTERNET_FLAG_RELOAD, 0);
+    if (!hConnect) {
+        std::cerr << GetLocalizedMessage("[Update] InternetOpenUrlA a \u00E9chou\u00E9: ", "[Update] InternetOpenUrlA failed: ") << GetLastError() << std::endl;
+        InternetCloseHandle(hInternet);
+        return false;
+    }
+
+    std::ofstream outFile(outputPath, std::ios::binary);
+    if (!outFile.is_open()) {
+        std::cerr << GetLocalizedMessage("[Update] Impossible de cr\u00E9er le fichier de sortie: ", "[Update] Could not create output file: ") << outputPath << std::endl;
+        InternetCloseHandle(hConnect);
+        InternetCloseHandle(hInternet);
+        return false;
+    }
+
+    char buffer[4096];
+    DWORD bytesRead;
+    while (InternetReadFile(hConnect, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
+        outFile.write(buffer, bytesRead);
+    }
+
+    outFile.close();
+    InternetCloseHandle(hConnect);
+    InternetCloseHandle(hInternet);
+
+    std::cout << GetLocalizedMessage("[Update] Fichier t\u00E9l\u00E9charg\u00E9 avec succ\u00E8s: ", "[Update] File downloaded successfully: ") << outputPath << std::endl;
+    return true;
+}
+
+// Fonction pour générer et exécuter le script de mise à jour
+void RunUpdateScript(const std::string& archivePath) {
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    std::string exeName = PathFindFileNameA(exePath);
+    std::string baseDir = std::string(exePath).substr(0, std::string(exePath).find_last_of("\\/"));
+    std::string scriptPath = baseDir + "\\update.bat";
+
+    std::ofstream scriptFile(scriptPath);
+    if (scriptFile.is_open()) {
+        scriptFile << "@echo off\n";
+        scriptFile << "echo Attente de la fermeture de XOrderInjector...\n";
+        scriptFile << "taskkill /IM \"" << exeName << "\" /F\n";
+        scriptFile << "timeout /t 2 /nobreak > nul\n";
+        scriptFile << "echo Extraction de la mise a jour...\n";
+
+        // Utiliser 7za pour décompresser. On met toute la commande entre guillemets correctement échappés.
+        std::string sevenZipCommand = "\"";
+        sevenZipCommand += baseDir + "\\7za.exe\" e \"";
+        sevenZipCommand += archivePath + "\" -o\"" + baseDir + "\\\" \"plugins\\XOrderHook\\*\" -aoa";
+        scriptFile << sevenZipCommand << "\n";
+
+        scriptFile << "echo Nettoyage...\n";
+        scriptFile << "del \"" << archivePath << "\"\n";
+        scriptFile << "echo Redemarrage de XOrderInjector...\n";
+        scriptFile << "start \"\" \"" << exePath << "\"\n";
+        scriptFile << "(goto) 2>nul & del \"%~f0\"\n"; // Auto-suppression du script
+        scriptFile.close();
+
+        // Exécuter le script
+        ShellExecuteA(NULL, "open", scriptPath.c_str(), NULL, NULL, SW_HIDE);
+    } else {
+        std::cerr << "[Update] Impossible de cr\u00E9er le script de mise à jour." << std::endl;
+    }
+}
+
+// Fonction pour vérifier les mises à jour et afficher une notification
+// Retourne true si une mise à jour est disponible et que l'application doit se fermer
+bool CheckForUpdatesAndNotify(const std::string& currentVersionFilePath) {
+    std::cout << GetLocalizedMessage("[Update] V\u00E9rification des mises \u00E0 jour...", "[Update] Checking for updates...") << std::endl;
+
+    // 1. Lire la version actuelle du fichier
+    std::ifstream versionFile(currentVersionFilePath);
+    std::string currentVersion;
+    if (versionFile.is_open()) {
+        std::getline(versionFile, currentVersion);
+        versionFile.close();
+    } else {
+        std::cerr << GetLocalizedMessage("[Update] AVERTISSEMENT: Impossible de lire le fichier de version: ", "[Update] WARNING: Unable to read version file: ") << currentVersionFilePath << std::endl;
+        return false;
+    }
+
+    // 2. Récupérer la dernière version depuis l'API GitHub
+    std::string latestVersion;
+    std::string downloadUrl;
+    std::string jsonResponse;
+
+    HINTERNET hInternet = InternetOpenA("XOrderInjector", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+    if (hInternet) {
+        DWORD dwFlags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_PRAGMA_NOCACHE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE;
+        HINTERNET hConnect = InternetOpenUrlA(hInternet, "https://api.github.com/repos/Aynshe/XOrderHook/releases/latest", "User-Agent: XOrderInjector/1.0\r\n", (DWORD)-1L, dwFlags, 0);
+        
+        if (hConnect) {
+            char buffer[8192];
+            DWORD bytesRead;
+            while (InternetReadFile(hConnect, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0) {
+                buffer[bytesRead] = '\0';
+                jsonResponse.append(buffer);
+            }
+            InternetCloseHandle(hConnect);
+        } else {
+             std::cerr << GetLocalizedMessage("[Update] Erreur de connexion à GitHub: ", "[Update] GitHub connection error: ") << GetLastError() << GetLocalizedMessage(". La v\u00E9rification des mises \u00E0 jour est ignor\u00E9e.", ". Update check is skipped.") << std::endl;
+             InternetCloseHandle(hInternet);
+             return false;
+        }
+        InternetCloseHandle(hInternet);
+    } else {
+        std::cerr << GetLocalizedMessage("[Update] Erreur WinINet: ", "[Update] WinINet error: ") << GetLastError() << GetLocalizedMessage(". La v\u00E9rification des mises \u00E0 jour est ignor\u00E9e.", ". Update check is skipped.") << std::endl;
+        return false;
+    }
+
+    if (jsonResponse.empty()) {
+        std::cerr << GetLocalizedMessage("[Update] ERREUR: La r\u00E9ponse de GitHub est vide.", "[Update] ERROR: GitHub response is empty.") << std::endl;
+        return false;
+    }
+
+    // Parser la version (tag_name)
+    size_t tagPos = jsonResponse.find("\"tag_name\":\"");
+    if (tagPos != std::string::npos) {
+        tagPos += strlen("\"tag_name\":\"");
+        size_t endTagPos = jsonResponse.find("\"", tagPos);
+        if (endTagPos != std::string::npos) {
+            latestVersion = jsonResponse.substr(tagPos, endTagPos - tagPos);
+        }
+    }
+
+    // Nettoyer et valider les versions
+    currentVersion = trim(currentVersion);
+    latestVersion = trim(latestVersion);
+
+    std::cout << "[Update] Version actuelle: '" << currentVersion << "' (len=" << currentVersion.length() << ")" << std::endl;
+    std::cout << "[Update] Version distante: '" << latestVersion << "' (len=" << latestVersion.length() << ")" << std::endl;
+
+        // Debugging: Print latestVersion before URL construction
+        std::cout << "[Update] Debug: latestVersion before URL construction: '" << latestVersion << "' (len=" << latestVersion.length() << ")" << std::endl;
+
+    if (latestVersion.empty()) {
+        std::cerr << GetLocalizedMessage("[Update] AVERTISSEMENT: Impossible de parser la version distante depuis la r\u00E9ponse de GitHub.", "[Update] WARNING: Could not parse remote version from GitHub response.") << std::endl;
+        return false;
+    }
+
+    // Comparer les versions
+    if (IsNewVersionAvailable(currentVersion, latestVersion)) {
+        std::wcout << GetLocalizedMessage(L"[Update] Une nouvelle mise \u00E0 jour est disponible: ", L"[Update] A new update is available: ") << StringToWString(latestVersion) << L"!" << std::endl;
+        
+        // Construire l'URL de téléchargement directement
+        downloadUrl = "https://github.com/Aynshe/XOrderHook/releases/download/" + latestVersion + "/RetroBat_XOrderHook.7z";
+
+        // Debugging: Print downloadUrl before validation
+        std::cout << "[Update] Debug: downloadUrl before validation: '" << downloadUrl << "' (len=" << downloadUrl.length() << ")" << std::endl;
+
+        if (downloadUrl.empty() || downloadUrl.length() < 4 || downloadUrl.rfind(".7z") != downloadUrl.length() - 3) {
+            std::cerr << GetLocalizedMessage("[Update] ERREUR: Impossible de trouver une URL de téléchargement valide pour l'archive .7z.", "[Update] ERROR: Could not find a valid download URL for the .7z archive.") << std::endl;
+            return false;
+        }
+        
+        std::cout << GetLocalizedMessage("[Update] URL de t\u00E9l\u00E9chargement trouv\u00E9e: ", "[Update] Download URL found: ") << downloadUrl << std::endl;
+
+        if (g_SimpleOverlayEnabled) {
+            std::wstring updateMsg = GetLocalizedMessage(L"Mise \u00E0 jour XOrderHook disponible: ", L"Update XOrderHook available: ") + StringToWString(latestVersion) + L"\n" + GetLocalizedMessage(L" T\u00E9l\u00E9chargement en cours...", L"Downloading...");
+            ShowOverlayMessage(updateMsg.c_str(), 5000, true);
+        }
+
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        std::string baseDir = std::string(exePath).substr(0, std::string(exePath).find_last_of("\\/"));
+        std::string archiveName = downloadUrl.substr(downloadUrl.find_last_of('/') + 1);
+        std::string archivePath = baseDir + "\\" + archiveName;
+
+        if (DownloadFile(downloadUrl, archivePath)) {
+             if (g_SimpleOverlayEnabled) {
+                std::wstring updateMsg = GetLocalizedMessage(L"Mise \u00E0 jour t\u00E9l\u00E9charg\u00E9e. Red\u00E9marrage...", L"Update downloaded. Restarting...");
+                ShowOverlayMessage(updateMsg.c_str(), 3000, true);
+                Sleep(3000);
+            }
+            RunUpdateScript(archivePath);
+            return true; 
+        } else {
+            std::cerr << GetLocalizedMessage("[Update] Échec du t\u00E9l\u00E9chargement de la mise \u00E0 jour.", "[Update] Update download failed.") << std::endl;
+             if (g_SimpleOverlayEnabled) {
+                ShowOverlayMessage(L"Update download failed.", 3000, false);
+                Sleep(3000);
+            }
+        }
+        return false;
+    } else {
+        std::cout << GetLocalizedMessage("[Update] Vous utilisez la dernière version disponible.", "[Update] You are using the latest version available.") << std::endl;
+        return false;
+    }
+}
+
+
+void UpdateXInputVersionInConfig(const std::string& gameName, const std::wstring& newXInputVersion, ProcessArchitecture gameArch) {
+    std::string iniPath = GetIniPath();
+    std::vector<std::string> lines;
+    std::ifstream configFile(iniPath);
+    bool gameFound = false;
+    bool inGamesSection = false;
+
+    if (configFile.is_open()) {
+        std::string line;
+        while (std::getline(configFile, line)) {
+            // Nettoyer les retours à la ligne
+            if (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
+                line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+                line.erase(std::remove(line.begin(), line.end(), '\n'), line.end());
+            }
+
+            if (line == "[Games]") {
+                inGamesSection = true;
+            } 
+            else if (!line.empty() && line[0] == '[') {
+                inGamesSection = false;
+            }
+
+            if (inGamesSection && !line.empty() && line[0] != ';') {
+                std::string currentLineGameName = line;
+                // Extraire le nom du jeu. La version de XInput est potentiellement après le nom, entre guillemets.
+                // Le nom du jeu est tout ce qui précède les guillemets.
+                size_t firstQuote = currentLineGameName.find('"');
+                if (firstQuote != std::string::npos) {
+                    currentLineGameName = currentLineGameName.substr(0, firstQuote);
+                    // Supprimer les espaces de fin / Trim trailing spaces
+                    size_t lastChar = currentLineGameName.find_last_not_of(" \t");
+                    if (std::string::npos != lastChar) {
+                        currentLineGameName.erase(lastChar + 1);
+                    }
+                }
+                
+                if (CleanExeName(currentLineGameName) == CleanExeName(gameName)) {
+                    // Mettre à jour la ligne existante
+                    std::wstring versionPath = newXInputVersion;
+                    if (gameArch == ProcessArchitecture::x86) {
+                        // Pour x86, ajouter le préfixe SysWOW64 si ce n'est pas déjà fait
+                        if (versionPath.find(L"SysWOW64") == std::wstring::npos && 
+                            versionPath.find(L"System32") == std::wstring::npos) {
+                            versionPath = L"SysWOW64\\" + versionPath;
+                        }
+                    } 
+                    else if (gameArch == ProcessArchitecture::x64) {
+                        // Pour x64, s'assurer qu'il n'y a pas de préfixe SysWOW64
+                        size_t syswowPos = versionPath.find(L"SysWOW64");
+                        if (syswowPos != std::wstring::npos) {
+                            versionPath = versionPath.substr(syswowPos + 9); // 9 = longueur de "SysWOW64\\"
+                        }
+                    }
+
+                    line = gameName + " \"" + WStringToString(versionPath) + "\"";
+                    gameFound = true;
+                }
+            }
+            lines.push_back(line);
+        }
+        configFile.close();
+    }
+
+    if (!gameFound) {
+        // Si le jeu n'a pas été trouvé, l'ajouter à la section [Games]
+        bool added = false;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (lines[i] == "[Games]") {
+                size_t insertPos = i + 1;
+                while (insertPos < lines.size() && 
+                       (lines[insertPos].empty() || 
+                        lines[insertPos][0] == ';' || 
+                        (lines[insertPos][0] != '[' && 
+                         lines[insertPos].find('=') == std::string::npos))) {
+                    insertPos++;
+                }
+                
+                std::wstring versionPath = newXInputVersion;
+                if (gameArch == ProcessArchitecture::x86) {
+                    if (versionPath.find(L"SysWOW64") == std::wstring::npos && 
+                        versionPath.find(L"System32") == std::wstring::npos) {
+                        versionPath = L"SysWOW64\\" + versionPath;
+                    }
+                } 
+                else if (gameArch == ProcessArchitecture::x64) {
+                    size_t syswowPos = versionPath.find(L"SysWOW64");
+                    if (syswowPos != std::wstring::npos) {
+                        versionPath = versionPath.substr(syswowPos + 9); // 9 = longueur de "SysWOW64\\"
+                    }
+                }
+                
+                lines.insert(lines.begin() + insertPos, gameName + " \"" + WStringToString(versionPath) + "\"");
+                added = true;
+                break;
+            }
+        }
+        
+        if (!added) {
+            // Si la section [Games] n'existe pas, l'ajouter et le jeu
+            lines.push_back("[Games]");
+            std::wstring versionPath = newXInputVersion;
+            if (gameArch == ProcessArchitecture::x86) {
+                if (versionPath.find(L"SysWOW64") == std::wstring::npos && 
+                    versionPath.find(L"System32") == std::wstring::npos) {
+                    versionPath = L"SysWOW64\\" + versionPath;
+                }
+            } 
+            else if (gameArch == ProcessArchitecture::x64) {
+                size_t syswowPos = versionPath.find(L"SysWOW64");
+                if (syswowPos != std::wstring::npos) {
+                    versionPath = versionPath.substr(syswowPos + 9); // 9 = longueur de "SysWOW64\\"
+                }
+            }
+            lines.push_back(gameName + " \"" + WStringToString(versionPath) + "\"");
+        }
+    }
+
+    // Réécrire le fichier de configuration
+    std::ofstream outFile(iniPath, std::ios::trunc);
+    if (outFile.is_open()) {
+        for (const auto& fileLine : lines) {
+            outFile << fileLine << '\n';
+        }
+        outFile.close();
+        std::cout << "[Config] Fichier XOrderConfig.ini mis à jour avec la version XInput pour " 
+                  << gameName << std::endl;
+    } 
+    else {
+        std::cerr << "[Config] Erreur: Impossible d'écrire dans XOrderConfig.ini" << std::endl;
+    }
+}
+
 int main(int argc, char* argv[]) {
+
     // Vérifier les arguments de ligne de commande pour les modes spéciaux / Check command line arguments for special modes
     if (argc >= 3 && strcmp(argv[1], "--inject") == 0) {
         // Mode injection directe (appelé par le processus auxiliaire) / Direct injection mode (called by helper process)
@@ -1296,23 +2045,43 @@ int main(int argc, char* argv[]) {
         std::string resultFile = (argc >= 5) ? argv[4] : "";
         
         if (pid > 0 && !dllPath.empty()) {
-            bool success = InjectDLLSimple(pid, dllPath);
+            std::string injectionResult = InjectDLLSimple(pid, dllPath);
             
             // Écrire le résultat dans le fichier temporaire / Write result to temporary file
             if (!resultFile.empty()) {
                 std::ofstream result(resultFile);
                 if (result.is_open()) {
-                    result << (success ? "SUCCESS" : "FAILED");
+                    result << injectionResult;
                     result.close();
                 }
             }
             
-            return success ? 0 : 1;
+            return (injectionResult == "SUCCESS") ? 0 : 1;
         }
         return 1;
     }
+
+    // Obtenir le chemin du répertoire de l'exécutable / Get executable directory path
+    char modulePath[MAX_PATH] = {0};
+    GetModuleFileNameA(NULL, modulePath, MAX_PATH);
+    std::string baseDir = modulePath;
+    baseDir = baseDir.substr(0, baseDir.find_last_of("\\/"));
+    std::string versionFilePath = baseDir + "\\XOrderHook.version"; // Corrected version file name
+
+    // Lire la configuration pour savoir si la mise à jour auto est activée
+    std::string iniPath = baseDir + "\\XOrderConfig.ini";
+    bool autoUpdateEnabled = (GetPrivateProfileIntA("Settings", "autoupdate", 1, iniPath.c_str()) != 0);
+
+    // Vérifier les mises à jour au démarrage si activé
+    if (autoUpdateEnabled) {
+        if (CheckForUpdatesAndNotify(versionFilePath)) {
+            return 0; // Quitter si une mise à jour est disponible et traitée
+        }
+    } else {
+        std::cout << GetLocalizedMessage("[Update] La mise à jour automatique est désactivée dans la configuration.", "[Update] Automatic update is disabled in the configuration.") << std::endl;
+    }
+
     
-    // Vérifier si une autre instance est en cours d'exécution / Check if another instance is running
     bool isFirstInstance = !IsAnotherInstanceRunning();
     
     // Si ce n'est pas la première instance, attendre 15 secondes que l'autre instance se termine / If not first instance, wait 15 seconds for other instance to finish
@@ -1345,6 +2114,22 @@ int main(int argc, char* argv[]) {
     // Détecter la langue du système / Detect system language
     g_UseFrenchLanguage = DetectFrenchSystem();
     
+    // Enregistrer la classe de fenêtre pour le serveur IPC
+    WNDCLASSEXW wc = { sizeof(WNDCLASSEX), CS_CLASSDC, IPCWindowProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, XORDER_INJECTOR_WNDCLASS_NAME, NULL };
+    if (!RegisterClassExW(&wc)) {
+        std::cerr << "[XOrderInjector] Erreur: Impossible d'enregistrer la classe de fenêtre IPC." << std::endl;
+        return 1;
+    }
+
+    // Créer une fenêtre cachée pour le serveur IPC
+    HWND hIPCWindow = CreateWindowW(XORDER_INJECTOR_WNDCLASS_NAME, NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
+    if (!hIPCWindow) {
+        std::cerr << "[XOrderInjector] Erreur: Impossible de creer la fenêtre IPC. Code d'erreur: " << GetLastError() << std::endl;
+        return 1;
+    }
+    std::cout << "[XOrderInjector] Fenetre IPC creee avec succes." << std::endl;
+    
+
     // Définir l'encodage de la console en UTF-8 / Set console encoding to UTF-8
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
@@ -1359,26 +2144,17 @@ int main(int argc, char* argv[]) {
         std::cout << GetLocalizedMessage("[XOrderInjector] Assurez-vous de lancer ce programme en tant qu'administrateur.", "[XOrderInjector] Make sure to run this program as administrator.") << std::endl;
     }
 
-    // Initialiser l'overlay de l'injecteur / Initialize injector overlay
-    InitializeInjectorOverlay();
+    
 
-    // Obtenir le chemin du répertoire de l'exécutable / Get executable directory path
-    char modulePath[MAX_PATH] = {0};
-    GetModuleFileNameA(NULL, modulePath, MAX_PATH);
-    std::string baseDir = modulePath;
-    baseDir = baseDir.substr(0, baseDir.find_last_of("\\/"));
-    std::string iniPath = baseDir + "\\XOrderConfig.ini";
+    
+
+    // Lire le reste de la configuration
     std::string dllPath = baseDir + "\\XOrderHook.dll";
-
-    // Lire la configuration / Read configuration
-    char settingsValue[256] = {0};
-    if (GetPrivateProfileStringA("Settings", nullptr, "", settingsValue, sizeof(settingsValue), iniPath.c_str()) > 0) {
-        // Lire le paramètre EnableDebugConsole (0=désactivé par défaut) / Read EnableDebugConsole parameter (0=disabled by default)
-        g_enableDebugConsole = (GetPrivateProfileIntA("Settings", "EnableDebugConsole", 0, iniPath.c_str()) != 0);
-        
-        if (g_enableDebugConsole) {
-            std::cout << "[DEBUG] Console de débogage activée" << std::endl; // Debug console enabled
-        }
+    g_enableDebugConsole = (GetPrivateProfileIntA("Settings", "EnableDebugConsole", 0, iniPath.c_str()) != 0);
+    g_SimpleOverlayEnabled = (GetPrivateProfileIntA("Settings", "SimpleOverlayEnabled", 1, iniPath.c_str()) != 0);
+    
+    if (g_enableDebugConsole) {
+        std::cout << "[DEBUG] Console de débogage activée" << std::endl; // Debug console enabled
     }
 
     std::cout << GetLocalizedMessage("[XOrderInjector] DLL à injecter : ", "[XOrderInjector] DLL to inject: ") << dllPath << std::endl;
@@ -1393,7 +2169,7 @@ int main(int argc, char* argv[]) {
         std::cout << "  game.exe" << std::endl;
         std::cout << "  another_game.exe\n" << std::endl;
         std::cout << GetLocalizedMessage("Les noms sont insensibles à la casse et l'extension .exe est optionnelle.", "Names are case-insensitive and .exe extension is optional.") << std::endl;
-        std::cout << GetLocalizedMessage("\nVous pouvez ajouter des jeux en utilisant START+HAUT sur votre manette.", "\nYou can add games using START+UP on your controller.") << std::endl;
+        std::cout << GetLocalizedMessage("\nYou can add games using START+HAUT sur votre manette.", "\nYou can add games using START+UP on your controller.") << std::endl;
     } else {
         std::cout << "Surveillance des jeux :" << std::endl; // Game monitoring:
         for (auto& g : games) {
@@ -1415,7 +2191,7 @@ int main(int argc, char* argv[]) {
     // Constantes de temporisation / Timing constants
     const int INITIAL_DELAY_MS = 5000;           // Délai initial avant de commencer à scanner / Initial delay before starting to scan
     const int STARTUP_TIMEOUT_MS = 90000;        // 90s max pour trouver un premier jeu / 90s max to find first game
-    const int SHUTDOWN_DELAY_MS = 10000;         // 10s avant la fermeture après la fin du dernier jeu / 10s before closing after last game ends
+    const int SHUTDOWN_DELAY_MS = 5000;         // 10s avant la fermeture après la fin du dernier jeu / 10s before closing after last game ends
     
     // Variables d'état / State variables
     auto startTime = std::chrono::steady_clock::now();
@@ -1429,16 +2205,20 @@ int main(int argc, char* argv[]) {
     while (true) {
         auto currentTime = std::chrono::steady_clock::now();
         
+        // Reset reload flag at the beginning of each iteration
+        g_ReloadConfigRequested = false;
+
         // Vérifier les combos de manettes (toujours actif) / Check controller combos (always active)
-        if (CheckControllerCombos(iniPath)) {
+        CheckControllerCombos(iniPath);
+        
+        if (g_ReloadConfigRequested) {
             std::cout << "[XOrderInjector] Nouveau jeu ajouté, rechargement de la configuration..." << std::endl; // New game added, reloading configuration...
             
             // Attendre 2 secondes pour que l'utilisateur puisse lire le message / Wait 2 seconds for user to read message
             std::cout << "[XOrderInjector] Attente de 2 secondes pour affichage du message..." << std::endl; // Waiting 2 seconds for message display...
             Sleep(2000);
             
-            // Fermer l'overlay après le délai / Close overlay after delay
-            ForceHideInjectorOverlay();
+            
             
             // Recharger la liste des jeux / Reload game list
             games = LoadWatchedGames(iniPath);
@@ -1490,7 +2270,7 @@ int main(int argc, char* argv[]) {
         }
         
         // Vérifier si on doit fermer l'application (uniquement si un jeu a déjà été attaché) / Check if application should close (only if game has been attached)
-        if (shutdownRequested && hasGameBeenAttached) {
+        if (shutdownRequested) {
             auto elapsedShutdown = std::chrono::duration_cast<std::chrono::milliseconds>(
                 currentTime - shutdownTime).count();
                 
@@ -1522,7 +2302,7 @@ int main(int argc, char* argv[]) {
                 CloseHandle(hProcess);
             } else {
                 // Le processus n'existe plus ou erreur d'accès / Process no longer exists or access error
-                std::cout << "[XOrderInjector] Processus terminé ou erreur d'accès (PID: " << *it << ")" << std::endl; // Process terminated or access error (PID: X)
+                std::cout << "[XOrderInjector] Processus terminé ou erreur d'accès (PID: " << *it << ", Erreur: " << GetLastError() << ")" << std::endl; // Process terminated or access error (PID: X, Error: Y)
                 it = injected_pids.erase(it);
             }
         }
@@ -1538,8 +2318,7 @@ int main(int argc, char* argv[]) {
                 ++failed_it;
             }
         }
-        // Vérifier si des processus injectés sont toujours actifs / Check if injected processes are still active
-        bool hasActiveProcesses = !injected_pids.empty();
+        // hasActiveProcesses is now calculated later, just before the shutdown logic
 
         // Scanner les nouveaux processus / Scan new processes
         HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -1639,6 +2418,9 @@ int main(int argc, char* argv[]) {
                             std::string processPath = GetProcessFullPath(pe.th32ProcessID);
                             
                             if (!processPath.empty()) {
+                                // Déployer les DLLs proxy AVANT l'injection principale
+                                DeployProxyDlls(pe.th32ProcessID, processArch);
+
                                 std::string processDir = processPath.substr(0, processPath.find_last_of("\\/"));
                                 std::string tmpFilePath = processDir + "\\XOrderPath.tmp";
                                 
@@ -1662,21 +2444,24 @@ int main(int argc, char* argv[]) {
                                     
                                     // Sélectionner la méthode d'injection selon l'architecture / Select injection method according to architecture
                                     std::string targetDllPath = GetArchSpecificDllPath(dllPath, processArch);
-                                    bool injectionSuccess = false;
-                                    
+                                    std::string injectionResult;
                                     // Si injection cross-architecture (x64 -> x86), utiliser un processus auxiliaire / If cross-architecture injection (x64 -> x86), use helper process
                                     ProcessArchitecture currentArch = GetProcessArchitecture(GetCurrentProcessId());
                                     if (currentArch == ProcessArchitecture::x64 && processArch == ProcessArchitecture::x86) {
                                         std::cout << "[XOrderInjector] Injection cross-architecture détectée, utilisation d'un processus auxiliaire..." << std::endl; // Cross-architecture injection detected, using helper process...
-                                        injectionSuccess = InjectDLLWithHelper(pe.th32ProcessID, targetDllPath, processArch);
+                                        injectionResult = InjectDLLWithHelper(pe.th32ProcessID, targetDllPath, processArch);
                                     } else {
-                                        injectionSuccess = InjectDLLSimple(pe.th32ProcessID, targetDllPath);
+                                        injectionResult = InjectDLLSimple(pe.th32ProcessID, targetDllPath);
                                     }
                                     
-                                    if (injectionSuccess) {
+                                    if (injectionResult == "SUCCESS") {
                                         injected_pids.push_back(pe.th32ProcessID);
                                         // Attendre un peu pour laisser la DLL s'initialiser / Wait a bit to let DLL initialize
                                         std::this_thread::sleep_for(std::chrono::seconds(1));
+                                        // Attendre 5 secondes supplémentaires pour afficher l'overlay après le lancement du jeu
+                                        Sleep(5000); 
+                                        std::wstring overlayMsg = GetLocalizedMessage(L"XInput charg\u00E9 : ", L"XInput loaded: ") + StringToWString(xinputVersion);
+                                        ShowOverlayMessage(overlayMsg.c_str(), 3000, true);
                                     } else {
                                         std::wcerr << L"[XOrderInjector] ÉCHEC de l'injection dans " << wExe << std::endl; // INJECTION FAILED in X
                                         // Empêcher de réessayer immédiatement sur un processus qui bloque l'injection / Prevent immediate retry on process that blocks injection
@@ -1686,9 +2471,6 @@ int main(int argc, char* argv[]) {
                                     std::wcerr << L"[XOrderInjector] ERREUR: Impossible de créer le fichier de configuration temporaire "
                                     << StringToWString(tmpFilePath) << std::endl; // ERROR: Unable to create temporary configuration file
                                 }
-                            } else {
-                                std::wcerr << L"[XOrderInjector] AVERTISSEMENT: Impossible d'obtenir le chemin du processus " 
-                                          << wExe << L". L'injection est impossible." << std::endl; // WARNING: Unable to get process path X. Injection is impossible.
                             }
                         } else {
                             std::wcout << L"[XOrderInjector] Le processus " << wExe << L" (PID: " << pe.th32ProcessID 
@@ -1708,26 +2490,30 @@ int main(int argc, char* argv[]) {
             DispatchMessage(&msg);
         }
 
+        // Traiter les messages de la fenêtre IPC
+        while (PeekMessage(&msg, hIPCWindow, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+
+        // Vérifier si des processus injectés sont toujours actifs / Check if injected processes are still active
+        bool hasActiveProcesses = !injected_pids.empty();
+
         // Gestion de l'arrêt automatique
         if (initialDelayPassed && !hasActiveProcesses && hasGameBeenAttached) {
-            if (!shutdownRequested) {
-                std::cout << "[XOrderInjector] Aucun processus actif. Fermeture dans 10 secondes..." << std::endl;
+            if (!shutdownRequested) { // Only set shutdownRequested if it's not already set
                 shutdownRequested = true;
                 shutdownTime = std::chrono::steady_clock::now();
+                std::cout << "[XOrderInjector] Dernier jeu détaché. Fermeture dans " 
+                         << (SHUTDOWN_DELAY_MS/1000) << " secondes..." << std::endl; // Last game detached. Closing in X seconds...
             }
-        } else if (shutdownRequested && hasActiveProcesses) {
-            std::cout << "[XOrderInjector] Nouveau processus détecté, annulation de la fermeture." << std::endl; // New process detected, cancelling shutdown.
-            shutdownRequested = false;
         }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // Reduced sleep time for better responsiveness / Temps de sommeil réduit pour une meilleure réactivité
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
-    
-    // Nettoyage final / Final cleanup
-    std::cout << "[XOrderInjector] Nettoyage et fermeture..." << std::endl; // Cleanup and shutdown...
-    
-    // Fermer l'overlay de l'injecteur / Close injector overlay
-    ShutdownInjectorOverlay();
-    
+
+    // Nettoyage de l'overlay
+    InjectorOverlay::GetInstance()->Shutdown();
+
     return 0;
 }

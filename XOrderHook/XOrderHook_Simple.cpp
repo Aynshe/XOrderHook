@@ -7,6 +7,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <string>
 #include <vector>
+#include "..\XOrderUtils.h"
 #include <map>
 #include <algorithm>
 #include <fstream>
@@ -97,9 +98,16 @@ static XInputGetStateEx_t OriginalXInputGetStateEx = nullptr;
 #pragma comment(lib, "Cfgmgr32.lib")
 
 #include "MinHook/include/MinHook.h"
-#include "SimpleOverlay.h"
+
 #include "StringUtils.h"
 #include "HookGlobals.h"
+#include "..\XOrderIPC.h"
+
+// Fonction pour trouver la fenêtre IPC de XOrderInjector
+HWND FindXOrderInjectorIPCWindow() {
+    return FindWindowW(XORDER_INJECTOR_WNDCLASS_NAME, NULL);
+}
+
 
 // Structure to store controller information / Structure pour stocker les informations d'un contrôleur
 struct ControllerInfo {
@@ -119,7 +127,7 @@ struct ControllerInfo {
         
         // Check format: USB\VID_XXXX&PID_XXXX&IG_XX\XX / Vérifier le format: USB\VID_XXXX&PID_XXXX&IG_XX\XX
         // where XXXX are hexadecimal digits / où XXXX sont des chiffres hexadécimaux
-        const std::wstring pattern = L"^\\\\\\.\\HID#VID_([0-9A-F]{4})&PID_([0-9A-F]{4})&IG_([0-9A-F]{2})#";
+        const std::wstring pattern = L"\\\\.\\HID#VID_([0-9A-F]{4})&PID_([0-9A-F]{4})&IG_([0-9A-F]{2})#";
         std::wregex re(pattern, std::regex_constants::icase);
         return std::regex_search(deviceId, re);
     }
@@ -168,9 +176,19 @@ static std::map<DWORD, int>      g_ResetSecondsHeld;     // physicalIndex -> num
 static std::map<DWORD, ULONGLONG> g_AddGameComboPressTime; // physicalIndex -> time for add game combo
 static std::map<DWORD, int>      g_AddGameSecondsHeld;    // physicalIndex -> number of pulses for add game
 
-// Variables for overlay toggle combo (START+LEFT) / Variables pour le combo de basculement d'overlay (START+GAUCHE)
-static std::map<DWORD, ULONGLONG> g_OverlayToggleComboPressTime; // physicalIndex -> time for overlay toggle combo
-static std::map<DWORD, int>      g_OverlayToggleSecondsHeld;    // physicalIndex -> number of pulses for overlay toggle
+// Variables for XInput version swapping
+// static bool g_XInputVersionSwapMode = false;
+static int g_SelectedXInputVersionIndex = 0;
+static const std::vector<std::wstring> g_AvailableXInputVersions = {
+    L"xinput1_4.dll",
+    L"xinput1_3.dll",
+    L"xinput9_1_0.dll",
+    L"xinput1_2.dll",
+    L"xinput1_1.dll"
+};
+static DWORD g_XInputSwapModeController = -1;
+// static std::map<DWORD, ULONGLONG> g_XInputVersionSwapComboPressTime;
+// static std::map<DWORD, int> g_XInputVersionSwapSecondsHeld;
 
 // Variables for confirmation vibration sequence / Variables pour la séquence de vibrations de confirmation
 static std::map<DWORD, int>       g_PulsesToSend;         // physicalIndex -> number of remaining pulses to send / physicalIndex -> nombre de pulsations restantes à envoyer
@@ -185,6 +203,8 @@ void InitializeControllerMapping();
 // Forward declarations of new functions / Déclarations anticipées des nouvelles fonctions
 std::wstring GetForegroundProcessName();
 bool AddGameToConfig(const std::wstring& gameName);
+
+void UpdateXInputVersionInConfig(const std::wstring& gameName, const std::wstring& newXInputVersion);
 
 // Pointer to loaded XInput module / Pointeur vers le module XInput chargé
 static HMODULE g_XInputDLL = nullptr;
@@ -214,7 +234,7 @@ std::wstring CleanDevicePath(const std::wstring& path) {
     std::transform(result.begin(), result.end(), result.begin(), ::toupper);
     // Replace double backslashes with single ones / Remplacer les doubles backslashes par des simples
     size_t pos = 0;
-    while ((pos = result.find(L"\\\\", pos)) != std::wstring::npos) {
+    while ((pos = result.find(L"\\", pos)) != std::wstring::npos) {
         result.replace(pos, 2, L"\\");
         pos += 1;
     }
@@ -252,17 +272,13 @@ static bool g_UseFrenchLanguage = false;
 // Variable pour contrôler l'affichage de l'overlay SimpleOverlay / Variable to control SimpleOverlay display
 static bool g_SimpleOverlayEnabled = true;
 
-// Fonction pour permettre à SimpleOverlay d'accéder à l'état global / Function to allow SimpleOverlay to access global state
 bool IsSimpleOverlayGloballyEnabled() {
     return g_SimpleOverlayEnabled;
 }
 
+
 // Function to detect system language / Fonction pour détecter la langue du système
-bool IsSystemLanguageFrench() {
-    LANGID langId = GetUserDefaultUILanguage();
-    WORD primaryLang = PRIMARYLANGID(langId);
-    return (primaryLang == LANG_FRENCH);
-}
+
 
 // Function to detect if system is French or Belgian / Fonction pour détecter si le système est en français ou belge
 bool DetectFrenchSystem() {
@@ -382,17 +398,17 @@ void WriteToLog(const std::wstring& wmessage) {
 
     std::wofstream log_stream(log_file_path, mode);
     if (log_stream.is_open()) {
-        try {
+        if (mode == std::ios_base::trunc) { // New file
+            log_stream.imbue(std::locale(log_stream.getloc(), new std::codecvt_utf8_utf16<wchar_t, 0x10ffff, std::generate_header>));
+        } else {
             log_stream.imbue(std::locale(log_stream.getloc(), new std::codecvt_utf8_utf16<wchar_t>));
-        } catch (...) { 
-            // Ignorer l'erreur d'imbue, continuer sans / Ignore imbue error, continue without
         }
 
         time_t now = time(0);
         tm ltm;
         localtime_s(&ltm, &now);
         wchar_t time_buf[30];
-        wcsftime(time_buf, 30, L"[%Y-%m-%d %H:%M:%S]", &ltm);
+wcsftime(time_buf, 30, L"[%Y-%m-%d %H:%M:%S]", &ltm);
 
         log_stream << time_buf << L" " << wmessage << std::endl;
     }
@@ -478,7 +494,7 @@ std::wstring GetConfigPath() {
 // Fonction pour charger la configuration depuis un fichier INI / Function to load configuration from INI file
 void LoadConfiguration() {
     // Forcer la fermeture de l'overlay avant le rechargement / Force overlay to close before reload
-    ForceHideSimpleOverlay();
+    
     
     bool tempVerbose = g_VerboseLogging;
     g_VerboseLogging = true; // Forcer les logs pendant le chargement / Force logging during loading
@@ -612,7 +628,7 @@ void LoadConfiguration() {
     // Si on n'a pas trouvé le chemin de l'injecteur, utiliser le fichier local / If injector path not found, use local file
     if (injectorConfigPath.empty()) {
         injectorConfigPath = configPath;
-        WriteToLog(L"[Settings] Fichier tmp non trouvé, utilisation du fichier local");
+         // WriteToLog(L"[Settings] Fichier tmp non trouvé, utilisation du fichier local");
     }
     
     WriteToLog(L"[Settings] Lecture depuis: " + injectorConfigPath);
@@ -628,18 +644,15 @@ void LoadConfiguration() {
     WriteToLog(L"[Settings] Debug - Entier lu: " + std::to_wstring(verboseLogging));
     
     g_VerboseLogging = (verboseLogging != 0);
+    g_SimpleOverlayEnabled = (GetPrivateProfileIntW(L"Settings", L"SimpleOverlayEnabled", 1, injectorConfigPath.c_str()) != 0);
     const wchar_t* statusMsg = g_VerboseLogging ? 
         GetLocalizedMessageW(L"Activé", L"Enabled") : 
         GetLocalizedMessageW(L"Désactivé", L"Disabled");
     WriteToLog(L"[Settings] VerboseLogging final: " + std::wstring(statusMsg));
+    WriteToLog(L"[Settings] SimpleOverlayEnabled final: " + std::to_wstring(g_SimpleOverlayEnabled));
+    WriteToLog(L"[Settings] VerboseLogging final: " + std::wstring(statusMsg));
 
-    // Lire SimpleOverlayEnabled depuis le fichier de l'injecteur / Read SimpleOverlayEnabled from injector file
-    int simpleOverlayEnabled = GetPrivateProfileIntW(L"Settings", L"SimpleOverlayEnabled", 1, injectorConfigPath.c_str());
-    g_SimpleOverlayEnabled = (simpleOverlayEnabled != 0);
-    const wchar_t* overlayStatusMsg = g_SimpleOverlayEnabled ? 
-        GetLocalizedMessageW(L"Activé", L"Enabled") : 
-        GetLocalizedMessageW(L"Désactivé", L"Disabled");
-    WriteToLog(L"[Settings] SimpleOverlayEnabled: " + std::wstring(overlayStatusMsg));
+    
 
     // Ne pas appliquer d'ordre par défaut automatiquement / Don't apply default order automatically
     // Cela permet aux autres méthodes de mappage (GUID, dynamique) de fonctionner / This allows other mapping methods (GUID, dynamic) to work
@@ -807,15 +820,78 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                     int currentSecond = static_cast<int>(timeHeld / 1000);
 
                     if (currentSecond >= 3 && g_AddGameSecondsHeld[physicalIdx] < 3) {
-                        // Détecter le jeu en focus et l'ajouter / Detect focused game and add it
+                        // Détecter le jeu en focus / Detect focused game
                         std::wstring gameName = GetForegroundProcessName();
                         if (!gameName.empty()) {
                             WriteToLog(L"[AddGame] Tentative d'ajout du jeu en focus: " + gameName);
-                            if (AddGameToConfig(gameName)) {
+                            
+                            // Vérifier si le jeu est déjà dans la configuration / Check if game is already in config
+                            bool gameExists = false;
+                            std::wstring configPath = GetConfigPath();
+                            if (!configPath.empty()) {
+                                std::wifstream configFile(configPath);
+                                if (configFile.is_open()) {
+                                    std::wstring line;
+                                    bool inGamesSection = false;
+                                    std::wstring gameNameLower = gameName;
+                                    std::transform(gameNameLower.begin(), gameNameLower.end(), gameNameLower.begin(), ::towlower);
+                                    
+                                    while (std::getline(configFile, line)) {
+                                        // Supprimer les retours chariot / Remove carriage returns
+                                        if (!line.empty() && line.back() == L'\r') {
+                                            line.pop_back();
+                                        }
+                                        
+                                        // Vérifier la section [Games] / Check [Games] section
+                                        if (line == L"[Games]") {
+                                            inGamesSection = true;
+                                            continue;
+                                        } else if (line.length() > 0 && line[0] == L'[') {
+                                            inGamesSection = false;
+                                            continue;
+                                        }
+                                        
+                                        // Vérifier les jeux existants / Check existing games
+                                        if (inGamesSection && !line.empty() && line[0] != L';') {
+                                            std::wstring existingGame = line;
+                                            size_t firstSpace = line.find_first_of(L" \t\r\n");
+                                            if (firstSpace != std::wstring::npos) {
+                                                existingGame = line.substr(0, firstSpace);
+                                            }
+                                            
+                                            std::wstring existingGameLower = existingGame;
+                                            std::transform(existingGameLower.begin(), existingGameLower.end(), 
+                                                         existingGameLower.begin(), ::towlower);
+                                            
+                                            // Supprimer .exe si présent / Remove .exe if present
+                                            if (gameNameLower.length() > 4 && gameNameLower.substr(gameNameLower.length() - 4) == L".exe") {
+                                                gameNameLower = gameNameLower.substr(0, gameNameLower.length() - 4);
+                                            }
+                                            if (existingGameLower.length() > 4 && existingGameLower.substr(existingGameLower.length() - 4) == L".exe") {
+                                                existingGameLower = existingGameLower.substr(0, existingGameLower.length() - 4);
+                                            }
+                                            
+                                            if (gameNameLower == existingGameLower) {
+                                                gameExists = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    configFile.close();
+                                }
+                            }
+                            
+                            if (gameExists) {
+                                WriteToLog(L"[AddGame] Le jeu est déjà dans la configuration, ajout ignoré: " + gameName);
+                            } else if (AddGameToConfig(gameName)) {
                                 WriteToLog(L"[Action] Jeu '" + gameName + L"' ajouté à la configuration!");
                                 
                                 // Afficher l'overlay de confirmation / Show confirmation overlay
-                                WriteToLog(L"[Overlay] Jeu ajouté: " + gameName);
+                                HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                                if (injectorWnd) {
+                                    const wchar_t* overlayMsg = GetLocalizedMessageW(L"JEU AJOUTÉ", L"GAME ADDED");
+                                    SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg);
+                                }
                                 
                                 // Vibration de confirmation (3 pulsations courtes) / Confirmation vibration (3 short pulses)
                                 if (OriginalXInputSetState) {
@@ -829,11 +905,15 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                                 WriteToLog(L"[AddGame] Echec de l'ajout du jeu (déjà existant ou erreur)");
                                 
                                 // Afficher l'overlay d'erreur / Show error overlay
-                                WriteToLog(L"[Overlay] Erreur jeu: " + gameName);
+                                HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                                if (injectorWnd) {
+                                    const wchar_t* overlayMsg = GetLocalizedMessageW(L"JEU D\u00CAJ\u00C0 EXISTANT", L"GAME ALREADY EXISTS");
+                                    SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg);
+                                }
                                 
                                 // Vibration d'erreur (1 longue pulsation) / Error vibration (1 long pulse)
                                 if (OriginalXInputSetState) {
-                                    XINPUT_VIBRATION vibration = {65535, 65535};
+                                    XINPUT_VIBRATION vibration = {30000, 30000};
                                     OriginalXInputSetState(physicalIdx, &vibration);
                                     g_VibrationStopTime[physicalIdx] = currentTime + 1000;
                                 }
@@ -842,11 +922,15 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                             WriteToLog(L"[AddGame] Impossible de détecter le jeu en focus");
                             
                             // Afficher l'overlay d'erreur / Show error overlay
-                            WriteToLog(L"[Overlay] Aucun jeu détecté");
+                            HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                            if (injectorWnd) {
+                                const wchar_t* overlayMsg = GetLocalizedMessageW(L"AUCUN JEU DÉTECTÉ", L"NO GAME DETECTED");
+                                SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg);
+                            }
                             
                             // Vibration d'erreur / Error vibration
                             if (OriginalXInputSetState) {
-                                XINPUT_VIBRATION vibration = {65535, 65535};
+                                XINPUT_VIBRATION vibration = {30000, 30000};
                                 OriginalXInputSetState(physicalIdx, &vibration);
                                 g_VibrationStopTime[physicalIdx] = currentTime + 1000;
                             }
@@ -880,13 +964,18 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                     int currentSecond = static_cast<int>(timeHeld / 1000);
 
                     if (currentSecond >= 3 && g_ResetSecondsHeld[physicalIdx] < 3) {
-                        const char* logMsg = GetLocalizedMessage("[Action] Ordre des manettes réinitialisé.", "[Action] Controller order reset.");
-                        WriteToLog(Utf8ToWide(logMsg));
+                        const wchar_t* logMsg = GetLocalizedMessageW(L"[Action] Ordre des manettes réinitialisé.", L"[Action] Controller order reset.");
+                        WriteToLog(logMsg);
 
                         // Afficher l'overlay de réinitialisation seulement si activé / Show reset overlay only if enabled
                         if (g_SimpleOverlayEnabled) {
-                            const char* overlayMsg = GetLocalizedMessage("RÉINITIALISATION PAR DÉFAUT", "DEFAULT RESET");
-                            ShowSimpleOverlayMessage(Utf8ToWide(overlayMsg), 2000);
+                            const wchar_t* overlayMsg = GetLocalizedMessageW(L"R\u00C8INITIALISATION PAR D\u00C8FAUT", L"DEFAULT RESET");
+                            HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                            if(injectorWnd) {
+                                SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg);
+                            } else {
+                                WriteToLog(L"[IPC] Fenêtre de l'injecteur non trouvée.");
+                            }
                         }
                         
                         g_DynamicControllerOrderByGUID.clear();
@@ -910,72 +999,78 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                     }
                 }
             }
-            // Priorité 3: Combo pour basculer l'overlay (START + GAUCHE) / Priority 3: Combo to toggle overlay (START + LEFT)
+            
+            // Priorité 3: Combo pour le changement de version XInput (START + GAUCHE) - LOGIQUE DÉPLACÉE VERS XORDERINJECTOR
+            /*
             else if (startPressed && dpadLeftPressed && !dpadUpPressed && !dpadDownPressed) {
-                if (g_OverlayToggleComboPressTime.find(physicalIdx) == g_OverlayToggleComboPressTime.end()) {
-                    const char* debugLog = GetLocalizedMessage("[Debug] Combo TOGGLE OVERLAY détecté sur l'index physique: ", "[Debug] TOGGLE OVERLAY combo detected on physical index: ");
-                    WriteToLog(Utf8ToWide(std::string(debugLog) + std::to_string(physicalIdx)));
-                    g_OverlayToggleComboPressTime[physicalIdx] = currentTime;
-                    g_OverlayToggleSecondsHeld[physicalIdx] = 0;
-                } else {
-                    ULONGLONG timeHeld = currentTime - g_OverlayToggleComboPressTime[physicalIdx];
+                if (g_XInputVersionSwapComboPressTime.find(physicalIdx) == g_XInputVersionSwapComboPressTime.end()) {
+                    WriteToLog(L"[Debug] Combo XINPUT SWAP détecté sur l'index physique: " + std::to_wstring(physicalIdx));
+                    g_XInputVersionSwapComboPressTime[physicalIdx] = currentTime;
+                    g_XInputVersionSwapSecondsHeld[physicalIdx] = 0;
+                }
+                else {
+                    ULONGLONG timeHeld = currentTime - g_XInputVersionSwapComboPressTime[physicalIdx];
                     int currentSecond = static_cast<int>(timeHeld / 1000);
 
-                    if (currentSecond >= 3 && g_OverlayToggleSecondsHeld[physicalIdx] < 3) {
-                        // Sauvegarder l'état actuel avant de le changer / Save current state before changing it
-                        bool wasEnabled = g_SimpleOverlayEnabled;
-                        
-                        // Basculer l'état de l'overlay / Toggle overlay state
-                        g_SimpleOverlayEnabled = !g_SimpleOverlayEnabled;
-                        
-                        const char* actionMsg;
-                        if (g_SimpleOverlayEnabled) {
-                            actionMsg = GetLocalizedMessage("[Action] Overlay SimpleOverlay activé.", "[Action] SimpleOverlay enabled.");
-                        } else {
-                            actionMsg = GetLocalizedMessage("[Action] Overlay SimpleOverlay désactivé.", "[Action] SimpleOverlay disabled.");
-                        }
-                        WriteToLog(Utf8ToWide(actionMsg));
-                        
-                        // Afficher l'overlay de confirmation selon le NOUVEL état / Show confirmation overlay according to NEW state
-                        if (g_SimpleOverlayEnabled) {
-                            // Overlay activé - Afficher message de confirmation / Overlay enabled - Show confirmation message
-                            const char* overlayMsg = GetLocalizedMessage("OVERLAY ACTIVÉ", "OVERLAY ENABLED");
-                            ShowSimpleOverlayMessageForced(Utf8ToWide(overlayMsg), 2000);
-                        } else {
-                            // Overlay désactivé - Afficher message de désactivation / Overlay disabled - Show disable message
-                            const char* overlayMsg = GetLocalizedMessage("OVERLAY DÉSACTIVÉ", "OVERLAY DISABLED");
-                            ShowSimpleOverlayMessageForced(Utf8ToWide(overlayMsg), 2000);
-                            
-                            // Forcer la fermeture d'urgence de tout overlay existant après un délai / Force emergency closure of any existing overlay after delay
-                            CreateThread(nullptr, 0, [](LPVOID param) -> DWORD {
-                                Sleep(2100); // Attendre que le message de désactivation soit affiché / Wait for disable message to be shown
-                                EmergencyHideSimpleOverlay();
-                                const char* emergencyMsg = GetLocalizedMessage("[Action] Fermeture d'urgence appliquée lors de la désactivation", "[Action] Emergency closure applied during deactivation");
-                                WriteToLog(Utf8ToWide(emergencyMsg));
-                                return 0;
-                            }, nullptr, 0, nullptr);
-                        }
-                        
-                        // Vibration de confirmation / Confirmation vibration
+                    if (currentSecond >= 3 && g_XInputVersionSwapSecondsHeld[physicalIdx] < 3) {
+                        g_XInputVersionSwapMode = true;
+                        g_XInputSwapModeController = physicalIdx;
+                        WriteToLog(L"[Action] Mode de sélection de version XInput activé.");
+                        // Afficher l'overlay initial
+                        std::wstring overlayMsg = L"XInput: " + g_AvailableXInputVersions[g_SelectedXInputVersionIndex];
+                        HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                        if (injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg.c_str());
+
                         if (OriginalXInputSetState) {
-                            XINPUT_VIBRATION vibration = {40000, 40000};
+                            XINPUT_VIBRATION vibration = { 40000, 40000 };
                             OriginalXInputSetState(physicalIdx, &vibration);
                             g_VibrationStopTime[physicalIdx] = currentTime + 300;
                         }
-                        
-                        g_OverlayToggleSecondsHeld[physicalIdx] = 3;
-                        g_OverlayToggleComboPressTime.erase(physicalIdx);
-                    } else if (currentSecond > 0 && currentSecond < 3 && g_OverlayToggleSecondsHeld[physicalIdx] < currentSecond) {
-                        // Vibration de progression / Progress vibration
+
+                        g_XInputVersionSwapSecondsHeld[physicalIdx] = 3;
+                        g_XInputVersionSwapComboPressTime.erase(physicalIdx);
+                    }
+                    else if (currentSecond > 0 && currentSecond < 3 && g_XInputVersionSwapSecondsHeld[physicalIdx] < currentSecond) {
                         if (OriginalXInputSetState) {
-                            XINPUT_VIBRATION vibration = {25000, 25000}; // Vibration moyenne / Medium vibration
+                            XINPUT_VIBRATION vibration = { 25000, 25000 };
                             OriginalXInputSetState(physicalIdx, &vibration);
                             g_VibrationStopTime[physicalIdx] = currentTime + 100;
                         }
-                        g_OverlayToggleSecondsHeld[physicalIdx] = currentSecond;
+                        g_XInputVersionSwapSecondsHeld[physicalIdx] = currentSecond;
                     }
                 }
             }
+            // Logique du mode de sélection de version XInput
+            else if (g_XInputVersionSwapMode && physicalIdx == g_XInputSwapModeController) {
+                if (dpadUpPressed) {
+                    g_SelectedXInputVersionIndex = (g_SelectedXInputVersionIndex > 0) ? g_SelectedXInputVersionIndex - 1 : g_AvailableXInputVersions.size() - 1;
+                    std::wstring overlayMsg = L"XInput: " + g_AvailableXInputVersions[g_SelectedXInputVersionIndex];
+                    HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                    if (injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg.c_str());
+                    Sleep(200); // Anti-rebond
+                }
+                else if (dpadDownPressed) {
+                    g_SelectedXInputVersionIndex = (g_SelectedXInputVersionIndex < g_AvailableXInputVersions.size() - 1) ? g_SelectedXInputVersionIndex + 1 : 0;
+                    std::wstring overlayMsg = L"XInput: " + g_AvailableXInputVersions[g_SelectedXInputVersionIndex];
+                    HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                    if (injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg.c_str());
+                    Sleep(200); // Anti-rebond
+                }
+                else if (startPressed) {
+                    UpdateXInputVersionInConfig(GetForegroundProcessName(), g_AvailableXInputVersions[g_SelectedXInputVersionIndex]);
+                    g_XInputVersionSwapMode = false;
+                    g_XInputSwapModeController = -1;
+                    WriteToLog(L"[Action] Version XInput mise à jour dans la configuration.");
+                    HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                    if (injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, GetLocalizedMessageW(L"VERSION XINPUT MISE À JOUR", L"XINPUT VERSION UPDATED"));
+                    if (OriginalXInputSetState) {
+                        XINPUT_VIBRATION vibration = { 50000, 50000 };
+                        OriginalXInputSetState(physicalIdx, &vibration);
+                        g_VibrationStopTime[physicalIdx] = currentTime + 500;
+                    }
+                }
+            }
+            */
             // Priorité 4: Mappage dynamique simple (START seul) / Priority 4: Simple dynamic mapping (START only)
             else if (startPressed && !dpadUpPressed && !dpadDownPressed && !dpadLeftPressed) {
                 if (g_StartButtonPressTime.find(physicalIdx) == g_StartButtonPressTime.end()) {
@@ -1011,10 +1106,11 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                                 
                                 // Afficher l'overlay avec l'index assigné seulement si activé / Show overlay with assigned index only if enabled
                                 if (g_SimpleOverlayEnabled) {
-                                    std::string overlayMessageA = isFrench ?
-                                        "Manette positionnée sur (XINPUT " + std::to_string(newInfo.index) + ")" :
-                                        "Controller positioned on (XINPUT " + std::to_string(newInfo.index) + ")";
-                                    ShowSimpleOverlayMessage(Utf8ToWide(overlayMessageA), 2000);
+                                    std::wstring overlayMessageW = isFrench ?
+                                        L"Manette sur (XINPUT " + std::to_wstring(newInfo.index) + L")" :
+                                        L"Controller on (XINPUT " + std::to_wstring(newInfo.index) + L")";
+                                    HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                                    if(injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMessageW.c_str());
                                 }
 
                                 wchar_t guidStr[40];
@@ -1052,8 +1148,8 @@ DWORD WINAPI XInputGetState_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
                 g_ResetSecondsHeld.erase(physicalIdx);
                 g_AddGameComboPressTime.erase(physicalIdx);
                 g_AddGameSecondsHeld.erase(physicalIdx);
-                g_OverlayToggleComboPressTime.erase(physicalIdx);
-                g_OverlayToggleSecondsHeld.erase(physicalIdx);
+                // g_XInputVersionSwapComboPressTime.erase(physicalIdx);
+                // g_XInputVersionSwapSecondsHeld.erase(physicalIdx);
             }
         }
     }
@@ -1128,25 +1224,359 @@ DWORD WINAPI XInputGetDSoundAudioDeviceGuids_Hook(DWORD dwUserIndex, GUID* pDSou
 }
 
 DWORD WINAPI XInputGetStateEx_Hook(DWORD dwUserIndex, XINPUT_STATE* pState) {
-    if (g_CallCount++ < 10) { // Ne pas inonder les logs / Don't flood logs
-        WriteToLog((std::string("XInputGetStateEx_Hook appelé pour la manette ") + std::to_string(dwUserIndex)).c_str());
-    }
-    
-    // Obtenir l'index réel de la manette / Get real controller index
-    DWORD realIndex = GetRemappedIndex(dwUserIndex);
-    
-    if (OriginalXInputGetStateEx) {
-        DWORD result = OriginalXInputGetStateEx(realIndex, pState);
-        
-        // Si la manette n'est pas connectée, essayer avec l'index d'origine / If controller not connected, try with original index
-        if (result == ERROR_DEVICE_NOT_CONNECTED && realIndex != dwUserIndex) {
-            result = OriginalXInputGetStateEx(dwUserIndex, pState);
+    ULONGLONG currentTime = GetTickCount64();
+
+    // --- Gérer la séquence de vibrations de confirmation --- / --- Handle confirmation vibration sequence ---
+    if (OriginalXInputSetState) {
+        for (auto it = g_PulsesToSend.begin(); it != g_PulsesToSend.end(); ) {
+            DWORD physicalIdx = it->first;
+            if (g_NextPulseTime.count(physicalIdx) && currentTime >= g_NextPulseTime[physicalIdx]) {
+                // Envoyer une pulsation intense / Send intense pulse
+                XINPUT_VIBRATION vibration = { 50000, 50000 };
+                OriginalXInputSetState(physicalIdx, &vibration);
+                g_VibrationStopTime[physicalIdx] = currentTime + 150; // Durée de la pulsation / Pulse duration
+
+                it->second--; // Une pulsation de moins à envoyer / One less pulse to send
+
+                if (it->second > 0) {
+                    // Programmer la prochaine pulsation après une courte pause / Schedule next pulse after short pause
+                    g_NextPulseTime[physicalIdx] = currentTime + 300; // Intervalle de 300ms / 300ms interval
+                    ++it;
+                } else {
+                    // Séquence terminée, on nettoie / Sequence finished, clean up
+                    g_NextPulseTime.erase(physicalIdx);
+                    it = g_PulsesToSend.erase(it);
+                }
+            } else {
+                ++it;
+            }
         }
-        
-        return result;
+    }
+
+    // Gérer l'arrêt des vibrations programmées / Handle stopping of scheduled vibrations
+    if (OriginalXInputSetState) {
+        for (auto it = g_VibrationStopTime.begin(); it != g_VibrationStopTime.end(); ) {
+            if (currentTime >= it->second) {
+                XINPUT_VIBRATION vibration = {0, 0};
+                OriginalXInputSetState(it->first, &vibration);
+                it = g_VibrationStopTime.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // --- Logique de mappage interactif --- / --- Interactive mapping logic ---
+    for (DWORD physicalIdx = 0; physicalIdx < XUSER_MAX_COUNT; ++physicalIdx) {
+        XINPUT_STATE physicalState;
+        if (OriginalXInputGetStateEx && OriginalXInputGetStateEx(physicalIdx, &physicalState) == ERROR_SUCCESS) {
+            bool startPressed = (physicalState.Gamepad.wButtons & XINPUT_GAMEPAD_START);
+            bool dpadDownPressed = (physicalState.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+            bool dpadUpPressed = (physicalState.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP);
+            bool dpadLeftPressed = (physicalState.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+
+            // Priorité 1: Combo pour ajouter un jeu (START + HAUT) / Priority 1: Combo to add game (START + UP)
+            if (startPressed && dpadUpPressed && !dpadDownPressed) {
+                if (g_AddGameComboPressTime.find(physicalIdx) == g_AddGameComboPressTime.end()) {
+                    bool isFrench = IsSystemLanguageFrench();
+                    std::wstring debugMessage = isFrench ?
+                        L"[Debug] Combo ADD GAME détecté sur l'index physique: " + std::to_wstring(physicalIdx) :
+                        L"[Debug] ADD GAME combo detected on physical index: " + std::to_wstring(physicalIdx);
+                    WriteToLog(debugMessage);
+                    g_AddGameComboPressTime[physicalIdx] = currentTime;
+                    g_AddGameSecondsHeld[physicalIdx] = 0;
+                } else {
+                    ULONGLONG timeHeld = currentTime - g_AddGameComboPressTime[physicalIdx];
+                    int currentSecond = static_cast<int>(timeHeld / 1000);
+
+                    if (currentSecond >= 3 && g_AddGameSecondsHeld[physicalIdx] < 3) {
+                        // Détecter le jeu en focus et l'ajouter / Detect focused game and add it
+                        std::wstring gameName = GetForegroundProcessName();
+                        if (!gameName.empty()) {
+                            WriteToLog(L"[AddGame] Tentative d'ajout du jeu en focus: " + gameName);
+                            if (AddGameToConfig(gameName)) {
+                                WriteToLog(L"[Action] Jeu '" + gameName + L"' ajouté à la configuration!");
+
+                                // Afficher l'overlay de confirmation / Show confirmation overlay
+                                HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                                if (injectorWnd) {
+                                    const wchar_t* overlayMsg = GetLocalizedMessage(L"JEU AJOUTÉ", L"GAME ADDED");
+                                    SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg);
+                                }
+                                
+                                // Vibration de confirmation (3 pulsations courtes) / Confirmation vibration (3 short pulses)
+                                if (OriginalXInputSetState) {
+                                    XINPUT_VIBRATION vibration = {30000, 30000};
+                                    OriginalXInputSetState(physicalIdx, &vibration);
+                                    g_VibrationStopTime[physicalIdx] = currentTime + 200;
+                                }
+                                g_PulsesToSend[physicalIdx] = 3; // 3 pulsations pour confirmer l'ajout / 3 pulses to confirm addition
+                                g_NextPulseTime[physicalIdx] = currentTime + 400;
+                             } else {
+                                WriteToLog(L"[AddGame] Echec de l'ajout du jeu (déjà existant ou erreur)");
+
+                                // Afficher l'overlay d'erreur / Show error overlay
+                                HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                                if (injectorWnd) {
+                                    const wchar_t* overlayMsg = GetLocalizedMessage(L"JEU EXISTANT", L"GAME ALREADY EXISTS");
+                                    SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg);
+                                }
+                                
+                                // Vibration d'erreur (1 longue pulsation) / Error vibration (1 long pulse)
+                                if (OriginalXInputSetState) {
+                                    XINPUT_VIBRATION vibration = {30000, 30000};
+                                    OriginalXInputSetState(physicalIdx, &vibration);
+                                    g_VibrationStopTime[physicalIdx] = currentTime + 1000;
+                                }
+                            }
+                        } else {
+                            WriteToLog(L"[AddGame] Impossible de détecter le jeu en focus");
+                            
+                            // Afficher l'overlay d'erreur / Show error overlay
+                            HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                            if (injectorWnd) {
+                                const wchar_t* overlayMsg = GetLocalizedMessage(L"AUCUN JEU DÈTECTÈ", L"NO GAME DETECTED");
+                                SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg);
+                            }
+                            
+                            // Vibration d'erreur / Error vibration
+                            if (OriginalXInputSetState) {
+                                XINPUT_VIBRATION vibration = {30000, 30000};
+                                OriginalXInputSetState(physicalIdx, &vibration);
+                                g_VibrationStopTime[physicalIdx] = currentTime + 1000;
+                            }
+                        }
+                        
+                        g_AddGameSecondsHeld[physicalIdx] = 3;
+                        g_AddGameComboPressTime.erase(physicalIdx);
+                    } else if (currentSecond > 0 && currentSecond < 3 && g_AddGameSecondsHeld[physicalIdx] < currentSecond) {
+                        // Vibration de progression / Progress vibration
+                        if (OriginalXInputSetState) {
+                            XINPUT_VIBRATION vibration = {20000, 20000}; // Vibration légère / Light vibration
+                            OriginalXInputSetState(physicalIdx, &vibration);
+                            g_VibrationStopTime[physicalIdx] = currentTime + 100;
+                        }
+                        g_AddGameSecondsHeld[physicalIdx] = currentSecond;
+                    }
+                }
+            }
+            // Priorité 2: Combo de réinitialisation (START + BAS) / Priority 2: Reset combo (START + DOWN)
+            else if (startPressed && dpadDownPressed && !dpadUpPressed) {
+                if (g_ResetComboPressTime.find(physicalIdx) == g_ResetComboPressTime.end()) {
+                    bool isFrench = IsSystemLanguageFrench();
+                    std::wstring debugMessage = isFrench ?
+                        L"[Debug] Combo RESET détecté sur l'index physique: " + std::to_wstring(physicalIdx) :
+                        L"[Debug] RESET combo detected on physical index: " + std::to_wstring(physicalIdx);
+                    WriteToLog(debugMessage);
+                    g_ResetComboPressTime[physicalIdx] = currentTime;
+                    g_ResetSecondsHeld[physicalIdx] = 0;
+                } else {
+                    ULONGLONG timeHeld = currentTime - g_ResetComboPressTime[physicalIdx];
+                    int currentSecond = static_cast<int>(timeHeld / 1000);
+
+                    if (currentSecond >= 3 && g_ResetSecondsHeld[physicalIdx] < 3) {
+                        const wchar_t* logMsg = GetLocalizedMessage(L"[Action] Ordre des manettes réinitialisé.", L"[Action] Controller order reset.");
+                        WriteToLog(logMsg);
+
+                        // Afficher l'overlay de réinitialisation seulement si activé / Show reset overlay only if enabled
+                        if (g_SimpleOverlayEnabled) {
+                            const wchar_t* overlayMsg = GetLocalizedMessage(L"R\u00C9INITIALISATION PAR D\u00C9FAUT", L"DEFAULT RESET");
+                            HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                            if(injectorWnd) {
+                                SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg);
+                            } else {
+                                WriteToLog(L"[IPC] Fenêtre de l'injecteur non trouvée.");
+                            }
+                        }
+                        
+                        g_DynamicControllerOrderByGUID.clear();
+                        g_StartButtonPressTime.clear(); // Nettoyer aussi les états d'assignation / Also clean assignment states
+                        g_SecondsHeld.clear();
+                        
+                        if (OriginalXInputSetState) {
+                            XINPUT_VIBRATION vibration = {40000, 40000};
+                            OriginalXInputSetState(physicalIdx, &vibration);
+                            g_VibrationStopTime[physicalIdx] = currentTime + 500;
+                        }
+                        g_ResetSecondsHeld[physicalIdx] = 3;
+                        g_ResetComboPressTime.erase(physicalIdx);
+                    } else if (currentSecond > 0 && currentSecond < 3 && g_ResetSecondsHeld[physicalIdx] < currentSecond) {
+                        if (OriginalXInputSetState) {
+                            XINPUT_VIBRATION vibration = {32767, 32767};
+                            OriginalXInputSetState(physicalIdx, &vibration);
+                            g_VibrationStopTime[physicalIdx] = currentTime + 100;
+                        }
+                        g_ResetSecondsHeld[physicalIdx] = currentSecond;
+                    }
+                }
+            }
+            // Priorité 3: Combo pour le changement de version XInput (START + GAUCHE) - LOGIQUE DÉPLACÉE VERS XORDERINJECTOR
+            /*
+            else if (startPressed && dpadLeftPressed && !dpadUpPressed && !dpadDownPressed) {
+                if (g_XInputVersionSwapComboPressTime.find(physicalIdx) == g_XInputVersionSwapComboPressTime.end()) {
+                    WriteToLog(L"[Debug] Combo XINPUT SWAP détecté sur l'index physique: " + std::to_wstring(physicalIdx));
+                    g_XInputVersionSwapComboPressTime[physicalIdx] = currentTime;
+                    g_XInputVersionSwapSecondsHeld[physicalIdx] = 0;
+                }
+                else {
+                    ULONGLONG timeHeld = currentTime - g_XInputVersionSwapComboPressTime[physicalIdx];
+                    int currentSecond = static_cast<int>(timeHeld / 1000);
+
+                    if (currentSecond >= 3 && g_XInputVersionSwapSecondsHeld[physicalIdx] < 3) {
+                        g_XInputVersionSwapMode = true;
+                        g_XInputSwapModeController = physicalIdx;
+                        WriteToLog(L"[Action] Mode de sélection de version XInput activé.");
+                        // Afficher l'overlay initial
+                        std::wstring overlayMsg = L"XInput: " + g_AvailableXInputVersions[g_SelectedXInputVersionIndex];
+                        HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                        if (injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg.c_str());
+
+                        if (OriginalXInputSetState) {
+                            XINPUT_VIBRATION vibration = { 40000, 40000 };
+                            OriginalXInputSetState(physicalIdx, &vibration);
+                            g_VibrationStopTime[physicalIdx] = currentTime + 300;
+                        }
+
+                        g_XInputVersionSwapSecondsHeld[physicalIdx] = 3;
+                        g_XInputVersionSwapComboPressTime.erase(physicalIdx);
+                    }
+                    else if (currentSecond > 0 && currentSecond < 3 && g_XInputVersionSwapSecondsHeld[physicalIdx] < currentSecond) {
+                        if (OriginalXInputSetState) {
+                            XINPUT_VIBRATION vibration = { 25000, 25000 };
+                            OriginalXInputSetState(physicalIdx, &vibration);
+                            g_VibrationStopTime[physicalIdx] = currentTime + 100;
+                        }
+                        g_XInputVersionSwapSecondsHeld[physicalIdx] = currentSecond;
+                    }
+                }
+            }
+            // Logique du mode de sélection de version XInput
+            else if (g_XInputVersionSwapMode && physicalIdx == g_XInputSwapModeController) {
+                if (dpadUpPressed) {
+                    g_SelectedXInputVersionIndex = (g_SelectedXInputVersionIndex > 0) ? g_SelectedXInputVersionIndex - 1 : g_AvailableXInputVersions.size() - 1;
+                    std::wstring overlayMsg = L"XInput: " + g_AvailableXInputVersions[g_SelectedXInputVersionIndex];
+                    HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                    if (injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg.c_str());
+                    Sleep(200); // Anti-rebond
+                }
+                else if (dpadDownPressed) {
+                    g_SelectedXInputVersionIndex = (g_SelectedXInputVersionIndex < g_AvailableXInputVersions.size() - 1) ? g_SelectedXInputVersionIndex + 1 : 0;
+                    std::wstring overlayMsg = L"XInput: " + g_AvailableXInputVersions[g_SelectedXInputVersionIndex];
+                    HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                    if (injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMsg.c_str());
+                    Sleep(200); // Anti-rebond
+                }
+                else if (startPressed) {
+                    UpdateXInputVersionInConfig(GetForegroundProcessName(), g_AvailableXInputVersions[g_SelectedXInputVersionIndex]);
+                    g_XInputVersionSwapMode = false;
+                    g_XInputSwapModeController = -1;
+                    WriteToLog(L"[Action] Version XInput mise à jour dans la configuration.");
+                    HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                    if (injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, GetLocalizedMessageW(L"VERSION XINPUT MISE À JOUR", L"XINPUT VERSION UPDATED"));
+                    if (OriginalXInputSetState) {
+                        XINPUT_VIBRATION vibration = { 50000, 50000 };
+                        OriginalXInputSetState(physicalIdx, &vibration);
+                        g_VibrationStopTime[physicalIdx] = currentTime + 500;
+                    }
+                }
+            }
+            */
+            // Priorité 4: Mappage dynamique simple (START seul) / Priority 4: Simple dynamic mapping (START only)
+            else if (startPressed && !dpadUpPressed && !dpadDownPressed && !dpadLeftPressed) {
+                if (g_StartButtonPressTime.find(physicalIdx) == g_StartButtonPressTime.end()) {
+                    bool isFrench = IsSystemLanguageFrench();
+                    std::wstring debugMessage = isFrench ?
+                        L"[Debug] START press détecté sur l'index physique: " + std::to_wstring(physicalIdx) :
+                        L"[Debug] START press detected on physical index: " + std::to_wstring(physicalIdx);
+                    WriteToLog(debugMessage);
+                    
+                    // Afficher l'overlay avec l'index XInput (utiliser l'index physique) / Show overlay with XInput index (use physical index)
+                    
+                    g_StartButtonPressTime[physicalIdx] = currentTime;
+                    g_SecondsHeld[physicalIdx] = 0;
+                } else {
+                    ULONGLONG timeHeld = currentTime - g_StartButtonPressTime[physicalIdx];
+                    int currentSecond = static_cast<int>(timeHeld / 1000);
+
+                    if (currentSecond >= 3 && g_SecondsHeld[physicalIdx] < 3) {
+                        if (g_PhysicalIndexToGuidMap.count(physicalIdx)) {
+                            GUID controllerGuid = g_PhysicalIndexToGuidMap[physicalIdx];
+                            bool alreadyAdded = false;
+                            for (const auto& info : g_DynamicControllerOrderByGUID) {
+                                if (IsEqualGUID(info.guid, controllerGuid)) { alreadyAdded = true; break; }
+                            }
+                            if (!alreadyAdded) {
+                                ControllerInfo newInfo;
+                                newInfo.guid = controllerGuid;
+                                newInfo.index = (DWORD)g_DynamicControllerOrderByGUID.size();
+                                g_DynamicControllerOrderByGUID.push_back(newInfo);
+
+                                // Déclarer isFrench une seule fois pour tout le bloc / Declare isFrench once for the entire block
+                                bool isFrench = IsSystemLanguageFrench();
+                                
+                                // Afficher l'overlay avec l'index assigné seulement si activé / Show overlay with assigned index only if enabled
+                                if (g_SimpleOverlayEnabled) {
+                                    std::wstring overlayMessageW = isFrench ?
+                                        L"Manette sur (XINPUT " + std::to_wstring(newInfo.index) + L")" :
+                                        L"Controller on (XINPUT " + std::to_wstring(newInfo.index) + L")";
+                                    HWND injectorWnd = FindXOrderInjectorIPCWindow();
+                                    if(injectorWnd) SendXOrderHookMessage(injectorWnd, CMD_OVERLAY, overlayMessageW.c_str());
+                                }
+
+                                wchar_t guidStr[40];
+                                StringFromGUID2(controllerGuid, guidStr, 40);
+                                std::string logMessageA = isFrench ?
+                                    "[Mappage Dynamique] Manette " + WideToUtf8(guidStr) + " assignée à l'index " + std::to_string(newInfo.index) :
+                                    "[Dynamic Mapping] Controller " + WideToUtf8(guidStr) + " assigned to index " + std::to_string(newInfo.index);
+                                WriteToLog(logMessageA);
+
+                                // Lancer la séquence de vibrations de confirmation / Start confirmation vibration sequence
+                                g_PulsesToSend[physicalIdx] = newInfo.index + 1;
+                                g_NextPulseTime[physicalIdx] = currentTime; // Démarrer immédiatement / Start immediately
+                                std::string vibrationMessageA = isFrench ?
+                                    "[Vibration] Lancement de " + std::to_string(newInfo.index + 1) + " pulsations pour l'index " + std::to_string(newInfo.index) :
+                                    "[Vibration] Starting " + std::to_string(newInfo.index + 1) + " pulses for index " + std::to_string(newInfo.index);
+                                WriteToLog(vibrationMessageA);
+                            }
+                        }
+                        g_SecondsHeld[physicalIdx] = 3;
+                        g_StartButtonPressTime.erase(physicalIdx);
+                    } else if (currentSecond > 0 && currentSecond < 3 && g_SecondsHeld[physicalIdx] < currentSecond) {
+                        if (OriginalXInputSetState) {
+                            XINPUT_VIBRATION vibration = {32767, 32767};
+                            OriginalXInputSetState(physicalIdx, &vibration);
+                            g_VibrationStopTime[physicalIdx] = currentTime + 100;
+                        }
+                        g_SecondsHeld[physicalIdx] = currentSecond;
+                    }
+                }
+            } else {
+                // Les boutons sont relâchés, on réinitialise tous les timers pour cet index / Buttons are released, reset all timers for this index
+                g_StartButtonPressTime.erase(physicalIdx);
+                g_SecondsHeld.erase(physicalIdx);
+                g_ResetComboPressTime.erase(physicalIdx);
+                g_ResetSecondsHeld.erase(physicalIdx);
+                g_AddGameComboPressTime.erase(physicalIdx);
+                g_AddGameSecondsHeld.erase(physicalIdx);
+                // g_XInputVersionSwapComboPressTime.erase(physicalIdx);
+                // g_XInputVersionSwapSecondsHeld.erase(physicalIdx);
+            }
+        }
+    }
+
+    // --- Logique de remappage standard --- / --- Standard remapping logic ---
+    DWORD remappedIndex = GetRemappedIndex(dwUserIndex);
+    
+    if (remappedIndex >= XUSER_MAX_COUNT) {
+        ZeroMemory(pState, sizeof(XINPUT_STATE));
+        return ERROR_DEVICE_NOT_CONNECTED;
+    }
+
+    // Appeler la fonction originale avec l'index remappé / Call original function with remapped index
+    if (OriginalXInputGetStateEx) {
+        return OriginalXInputGetStateEx(remappedIndex, pState);
     } else if (OriginalXInputGetState) {
-        // Fallback sur XInputGetState si XInputGetStateEx n'est pas disponible / Fallback to XInputGetState if XInputGetStateEx not available
-        return XInputGetState_Hook(dwUserIndex, pState);
+        return OriginalXInputGetState(remappedIndex, pState);
     }
     return ERROR_DEVICE_NOT_CONNECTED;
 }
@@ -1357,7 +1787,7 @@ bool InitializeMinHook() {
     
     // Fonction utilitaire pour logger le résultat de la création d'un hook / Utility function to log hook creation result
     auto CreateAndLogHook = [](LPCWSTR pszModule, LPCSTR pszProcName, LPVOID pDetour, LPVOID* ppOriginal) -> MH_STATUS {
-        std::string hookMsg = GetLocalizedMessage("Creation du hook pour ", "Creating hook for ") + std::string(pszProcName) + "...";
+        std::string hookMsg = GetLocalizedMessage("Création du hook pour ", "Creating hook for ") + std::string(pszProcName) + "...";
         WriteToLog(hookMsg.c_str());
         MH_STATUS status = MH_CreateHookApi(pszModule, pszProcName, pDetour, ppOriginal);
         if (status != MH_OK) {
@@ -1380,7 +1810,7 @@ bool InitializeMinHook() {
     wchar_t dllPath[MAX_PATH];
     if (g_XInputDLL && GetModuleFileNameW(g_XInputDLL, dllPath, MAX_PATH) != 0) {
         // Extraire juste le nom du fichier / Extract just the filename
-        wchar_t* lastBackslash = wcsrchr(dllPath, L'\\\\');
+        wchar_t* lastBackslash = wcsrchr(dllPath, L'\\');
         if (lastBackslash != nullptr) {
             wcscpy_s(baseDllName, lastBackslash + 1);
         }
@@ -1473,18 +1903,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             // Initialiser le mapping après avoir récupéré les pointeurs originaux / Initialize mapping after getting original pointers
             InitializeControllerMapping();
             
-            // Initialiser l'overlay système / Initialize system overlay
-            WriteToLog(L"[Overlay] Overlay initialisé");
+            
             
             break;
         }
         case DLL_PROCESS_DETACH: {
-            // Nettoyer l'overlay système / Clean up system overlay
-            WriteToLog(L"[Overlay] Overlay fermé");
+            
             
             // Nettoyer MinHook / Clean up MinHook
             MH_Uninitialize();
-            WriteToLog(GetLocalizedMessage("DLL dechargee", "DLL unloaded"));
+            WriteToLog(GetLocalizedMessage("DLL dechargée", "DLL unloaded"));
             break;
         }
     }
@@ -1557,8 +1985,43 @@ bool AddGameToConfig(const std::wstring& gameName) {
         }
         
         // Vérifier si le jeu existe déjà / Check if game already exists
-        if (inGamesSection && line == gameName) {
-            gameExists = true;
+        if (inGamesSection) {
+            // Ignorer les commentaires et les lignes vides / Skip comments and empty lines
+            if (line.empty() || line[0] == L';') continue;
+            
+            // Extraire le nom du jeu. La version de XInput est potentiellement après le nom, entre guillemets.
+            // Le nom du jeu est tout ce qui précède les guillemets.
+            std::wstring existingGame = line;
+            size_t firstQuote = existingGame.find(L'"');
+            if (firstQuote != std::wstring::npos) {
+                existingGame = existingGame.substr(0, firstQuote);
+                // Supprimer les espaces de fin / Trim trailing spaces
+                size_t lastChar = existingGame.find_last_not_of(L" \t");
+                if (std::wstring::npos != lastChar) {
+                    existingGame.erase(lastChar + 1);
+                }
+            }
+            
+            // Comparaison insensible à la casse / Case-insensitive comparison
+            std::wstring gameNameLower = gameName;
+            std::wstring existingGameLower = existingGame;
+            
+            std::transform(gameNameLower.begin(), gameNameLower.end(), gameNameLower.begin(), ::towlower);
+            std::transform(existingGameLower.begin(), existingGameLower.end(), existingGameLower.begin(), ::towlower);
+            
+            // Supprimer .exe si présent / Remove .exe if present
+            if (gameNameLower.length() > 4 && gameNameLower.substr(gameNameLower.length() - 4) == L".exe") {
+                gameNameLower = gameNameLower.substr(0, gameNameLower.length() - 4);
+            }
+            if (existingGameLower.length() > 4 && existingGameLower.substr(existingGameLower.length() - 4) == L".exe") {
+                existingGameLower = existingGameLower.substr(0, existingGameLower.length() - 4);
+            }
+            
+            if (gameNameLower == existingGameLower) {
+                gameExists = true;
+                WriteToLog(L"[AddGame] Jeu trouvé en double (comparaison insensible à la casse): " + existingGame);
+                break;
+            }
         }
         
         lines.push_back(line);
@@ -1608,5 +2071,57 @@ bool AddGameToConfig(const std::wstring& gameName) {
     return true;
 }
 
-#endif // XORDERHOOK_SIMPLE_CPP
+void UpdateXInputVersionInConfig(const std::wstring& gameName, const std::wstring& newXInputVersion) {
+    if (gameName.empty()) return;
 
+    std::wstring configPath = GetConfigPath();
+    if (configPath.empty()) return;
+
+    std::wifstream configFile(configPath);
+    if (!configFile.is_open()) return;
+
+    std::vector<std::wstring> lines;
+    std::wstring line;
+    bool gameFound = false;
+
+    while (std::getline(configFile, line)) {
+        if (!line.empty() && line.back() == L'\r') {
+            line.pop_back();
+        }
+
+        std::wistringstream iss(line);
+        std::wstring currentAppName;
+        iss >> currentAppName;
+
+        if (currentAppName.length() > 0 && currentAppName[0] == L'[') {
+            lines.push_back(line);
+            continue;
+        }
+
+        if (_wcsicmp(currentAppName.c_str(), gameName.c_str()) == 0) {
+            std::wstring newLine = gameName + L" \"" + newXInputVersion + L"\"";
+            lines.push_back(newLine);
+            gameFound = true;
+        }
+        else {
+            lines.push_back(line);
+        }
+    }
+    configFile.close();
+
+    if (gameFound) {
+        std::wofstream outFile(configPath);
+        if (!outFile.is_open()) return;
+
+        for (const auto& fileLine : lines) {
+            outFile << fileLine << std::endl;
+        }
+        outFile.close();
+        WriteToLog(L"[Config] Version XInput mise à jour pour " + gameName + L" à " + newXInputVersion);
+    }
+    else {
+        WriteToLog(L"[Config] Jeu non trouvé pour la mise à jour de la version XInput: " + gameName);
+    }
+}
+
+#endif // XORDERHOOK_SIMPLE_CPP

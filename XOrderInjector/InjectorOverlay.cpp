@@ -1,5 +1,6 @@
 #include "InjectorOverlay.h"
 #include "..\XOrderIPC.h" // Include the shared IPC header
+#include "..\XOrderUtils.h" // Include the new shared header file
 #include <windows.h>
 #include <algorithm>
 #include <iostream>
@@ -385,17 +386,8 @@ LRESULT CALLBACK InjectorOverlay::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam
         case WM_DESTROY:
             return 0;
 
-        case WM_COPYDATA: {
-            COPYDATASTRUCT* pcds = (COPYDATASTRUCT*)lParam;
-            if (pcds && pcds->dwData == XORDER_IPC_MESSAGE_ID) {
-                XOrderOverlayMsgData* msgData = (XOrderOverlayMsgData*)pcds->lpData;
-                if (instance) {
-                    instance->ShowMessage(msgData->message, msgData->duration, msgData->isSuccess);
-                }
-                return TRUE; // Indicate that the message was processed
-            }
-            break;
-        }
+        // WM_COPYDATA is handled by the main injector window, not the overlay window.
+        // This case is removed to fix build errors and align with the new IPC design.
             
         default:
             return DefWindowProc(hwnd, uMsg, wParam, lParam);
@@ -462,25 +454,11 @@ void ShutdownInjectorOverlay() {
     }
 }
 
-// Fonction pour détecter la langue du système / Function to detect system language
-bool IsSystemLanguageFrench() {
-    LANGID langId = GetUserDefaultUILanguage();
-    WORD primaryLang = PRIMARYLANGID(langId);
-    return (primaryLang == LANG_FRENCH);
-}
 
-void ShowInjectorOverlayMessage(const std::wstring& gameName, bool success) {
+
+void ShowInjectorOverlayMessage(const std::wstring& message, bool success) {
     InjectorOverlay* overlay = InjectorOverlay::GetInstance();
     if (overlay) {
-        std::wstring message;
-        bool isFrench = IsSystemLanguageFrench();
-        
-        if (success) {
-            message = isFrench ? L"[+] JEU AJOUTE: " + gameName : L"[+] GAME ADDED: " + gameName;
-        } else {
-            message = isFrench ? L"[-] ECHEC: " + gameName : L"[-] FAILED: " + gameName;
-        }
-        
         // S'assurer que l'overlay est initialisé / Ensure overlay is initialized
         if (!overlay->IsInitialized()) {
             overlay->Initialize();

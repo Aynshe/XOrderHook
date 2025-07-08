@@ -11,7 +11,7 @@
                              },
     "version":  "1.0.0",
     "project":  "XOrder - XInput Controller Reorder Tool",
-    "created":  "2025-06-23T22:11:33.239668",
+    "created":  "2025-07-08T18:03:51.367903",
     "security_features":  {
                               "legal_copyright":  "Copyright (C) 2024 XOrder Gaming Tools. All rights reserved.",
                               "manifest_features":  [
@@ -22,66 +22,86 @@
                                                     ],
                               "version_info":  "Complete version information embedded",
                               "file_descriptions":  {
+                                                        "XOrderInjector.exe":  "XOrder Injector - XInput Controller Reorder Service",
+                                                        "XOrderInjector_x86.exe":  "XOrder Injector - XInput Controller Reorder Service",
                                                         "SLD3.dll":  "XOrder Component",
+                                                        "7za.exe":  "XOrder Component",
                                                         "XOrderHook_x86.dll":  "XOrder Hook DLL - XInput Controller Reorder Library",
                                                         "XOrderHook.dll":  "XOrder Hook DLL - XInput Controller Reorder Library",
-                                                        "XOrderInjector_x86.exe":  "XOrder Injector - XInput Controller Reorder Service",
-                                                        "XOrderInjector.exe":  "XOrder Injector - XInput Controller Reorder Service"
+                                                        "7za.dll":  "XOrder Component"
                                                     },
                               "company_name":  "XOrder Gaming Tools"
                           },
     "files":  {
-                  "SLD3.dll":  {
-                                   "sha256":  "7c0225c23442cc0270de2851a54dcc618d8d95266f904755edd43d83e4f6701f",
-                                   "manifest":  "integrated",
-                                   "modified":  "2025-06-23T22:06:26.090864",
-                                   "path":  "F:/.CascadeProjects_2/XOrder/Release/SLD3.dll",
-                                   "md5":  "ba20718c8310e0f717e0d0cded7692a1",
-                                   "platform":  "x64",
-                                   "size":  167424
-                               },
-                  "XOrderHook_x86.dll":  {
-                                             "sha256":  "b3ef36ef2a0b133cfbaf5cef81b9ef1ed0e4fa8613d9d88697e856a3d1c85b42",
-                                             "manifest":  "integrated",
-                                             "modified":  "2025-06-23T22:06:39.224758",
-                                             "path":  "F:/.CascadeProjects_2/XOrder/Release/XOrderHook_x86.dll",
-                                             "md5":  "29f2d181ef996df4b1ce8131b563edf2",
-                                             "platform":  "x86",
-                                             "size":  151552
-                                         },
-                  "XOrderHook.dll":  {
-                                         "sha256":  "7c0225c23442cc0270de2851a54dcc618d8d95266f904755edd43d83e4f6701f",
-                                         "manifest":  "integrated",
-                                         "modified":  "2025-06-23T22:06:26.090864",
-                                         "path":  "F:/.CascadeProjects_2/XOrder/Release/XOrderHook.dll",
-                                         "md5":  "ba20718c8310e0f717e0d0cded7692a1",
-                                         "platform":  "x64",
-                                         "size":  167424
-                                     },
-                  "XOrderInjector_x86.exe":  {
-                                                 "size":  137216,
-                                                 "manifest":  "integrated",
-                                                 "privileges":  "requireAdministrator",
-                                                 "sha256":  "e9a8b56ecd996f1482cd3b3559b8d6fb2d994e1cc5eb629cc4f58b8cfbf97c55",
-                                                 "modified":  "2025-06-23T22:06:36.964573",
-                                                 "platform":  "x86",
-                                                 "path":  "F:/.CascadeProjects_2/XOrder/Release/XOrderInjector_x86.exe",
-                                                 "md5":  "2bc57acee15d823a790cd63c5f55e0ad"
-                                             },
                   "XOrderInjector.exe":  {
-                                             "size":  156160,
+                                             "size":  213504,
                                              "manifest":  "integrated",
                                              "privileges":  "requireAdministrator",
-                                             "sha256":  "0ed863fad916bc7005520a8c31d336d41a06d5e8266ade0e4347f228add8e3a4",
-                                             "modified":  "2025-06-23T22:06:24.081539",
+                                             "sha256":  "37aedd624ac87a81aa80475068b1dc6aa00446a0d1ed1b84efb60d47dce40bfe",
+                                             "modified":  "2025-07-07T20:44:27.022218",
                                              "platform":  "x64",
-                                             "path":  "F:/.CascadeProjects_2/XOrder/Release/XOrderInjector.exe",
-                                             "md5":  "71d7f360644ae4ad60837195e3712e1c"
-                                         }
+                                             "path":  "F:/.CascadeProjects/XOrder/Release/XOrderInjector.exe",
+                                             "md5":  "1c0f142ca87607b489c6aadd15cfa8e6"
+                                         },
+                  "XOrderInjector_x86.exe":  {
+                                                 "size":  194048,
+                                                 "manifest":  "integrated",
+                                                 "privileges":  "requireAdministrator",
+                                                 "sha256":  "4eb081806aebf0844329de70c264da54e03c7c02ef3e9e78539c9bd59856588a",
+                                                 "modified":  "2025-07-07T20:44:07.352225",
+                                                 "platform":  "x86",
+                                                 "path":  "F:/.CascadeProjects/XOrder/Release/XOrderInjector_x86.exe",
+                                                 "md5":  "82fc3cdc3eaabc3941ebab6803a1f567"
+                                             },
+                  "SLD3.dll":  {
+                                   "sha256":  "0dfd3c4f7211ee2e3be09d20808053bbbbb172303741f6c91e876c4df8ee6723",
+                                   "manifest":  "integrated",
+                                   "modified":  "2025-07-07T20:44:28.454377",
+                                   "path":  "F:/.CascadeProjects/XOrder/Release/SLD3.dll",
+                                   "md5":  "be77491e5923f57cbc45571837772ba5",
+                                   "platform":  "x64",
+                                   "size":  182784
+                               },
+                  "7za.exe":  {
+                                  "sha256":  "223b873c50380fe9a39f1a22b6abf8d46db506e1c08d08312902f6f3cd1f7ac3",
+                                  "manifest":  "integrated",
+                                  "modified":  "2024-11-29T19:00:00.000000",
+                                  "path":  "F:/.CascadeProjects/XOrder/Release/7za.exe",
+                                  "md5":  "86d2e800b12ce5da07f9bd2832870577",
+                                  "platform":  "x64",
+                                  "size":  849920
+                              },
+                  "XOrderHook_x86.dll":  {
+                                             "sha256":  "1dbff0f27ab72a6ade4a6b474725af82ce9910810f60822ead9f8caed7b1e3a7",
+                                             "manifest":  "integrated",
+                                             "modified":  "2025-07-07T20:44:09.295237",
+                                             "path":  "F:/.CascadeProjects/XOrder/Release/XOrderHook_x86.dll",
+                                             "md5":  "1fd629642cc6f35a0e5ab51df52a546b",
+                                             "platform":  "x86",
+                                             "size":  167424
+                                         },
+                  "XOrderHook.dll":  {
+                                         "sha256":  "0dfd3c4f7211ee2e3be09d20808053bbbbb172303741f6c91e876c4df8ee6723",
+                                         "manifest":  "integrated",
+                                         "modified":  "2025-07-07T20:44:28.454377",
+                                         "path":  "F:/.CascadeProjects/XOrder/Release/XOrderHook.dll",
+                                         "md5":  "be77491e5923f57cbc45571837772ba5",
+                                         "platform":  "x64",
+                                         "size":  182784
+                                     },
+                  "7za.dll":  {
+                                  "sha256":  "85982adbb0716aa53c08514079b91104f1bed4aea953c78301b452e7069f9d87",
+                                  "manifest":  "integrated",
+                                  "modified":  "2024-11-29T19:00:00.000000",
+                                  "path":  "F:/.CascadeProjects/XOrder/Release/7za.dll",
+                                  "md5":  "c8a42deb5ca6eda1db999ec29ac8c568",
+                                  "platform":  "x64",
+                                  "size":  290816
+                              }
               },
     "website":  "https://github.com/Aynshe/XOrderHook",
     "build_info":  {
-                       "build_date":  "2025-06-23T22:11:33",
+                       "build_date":  "2025-07-08T18:03:51",
                        "manifest_integration_method":  "Linker embedded",
                        "configuration":  "Release",
                        "generated_by":  "Generate-FileManifest.ps1",

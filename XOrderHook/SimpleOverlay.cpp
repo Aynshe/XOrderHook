@@ -1,4 +1,5 @@
 #include "SimpleOverlay.h"
+#include "..\XOrderUtils.h"
 #include "..\XOrderIPC.h"
 #include "HookGlobals.h" // Include the shared IPC header
 #include <algorithm>
@@ -6,7 +7,7 @@
 
 // External declarations / Déclarations externes
 extern void WriteToLog(const std::wstring& message);
-extern bool IsSystemLanguageFrench();
+
 extern bool IsSimpleOverlayGloballyEnabled(); // Fonction pour vérifier l'état global / Function to check global state
 
 SimpleOverlay* SimpleOverlay::instance = nullptr;
@@ -65,51 +66,36 @@ DWORD WINAPI SimpleOverlay::AsyncShowMessageThreadProc(LPVOID lpParam) {
         return 1; // Should not happen.
     }
 
+    // The local overlay logic is deprecated. The new design uses the injector's overlay.
+    // This code is commented out to prevent build errors with the new XOrderIPC.h header.
+    /*
     HWND injectorHwnd = nullptr;
     wchar_t debugMsg[512];
 
     // Retry finding the window a few times to handle timing issues.
-    // Réessayer de trouver la fenêtre plusieurs fois pour gérer les problèmes de synchronisation.
     for (int i = 0; i < 5; ++i) {
         injectorHwnd = FindWindowW(L"XOrderInjectorOverlay", nullptr);
         if (injectorHwnd) {
-            if (g_VerboseLogging) {
-                swprintf_s(debugMsg, L"[XOrderHook] Found injector overlay window handle: %p on try %d\n", injectorHwnd, i + 1);
-                OutputDebugStringW(debugMsg);
-            }
             break;
         }
-        Sleep(100); // Wait 100ms before retrying / Attendre 100ms avant de réessayer
+        Sleep(100);
     }
 
     if (injectorHwnd) {
-        XOrderOverlayMsgData msgData;
-        wcsncpy_s(msgData.message, MAX_OVERLAY_MSG_LENGTH, data->message.c_str(), _TRUNCATE);
-        msgData.duration = data->duration;
-        msgData.isSuccess = true;
+        // This part is broken due to XOrderIPC.h changes
+        // XOrderOverlayMsgData msgData;
+        // wcsncpy_s(msgData.message, MAX_OVERLAY_MSG_LENGTH, data->message.c_str(), _TRUNCATE);
+        // msgData.duration = data->duration;
+        // msgData.isSuccess = true;
 
-        COPYDATASTRUCT cds;
-        cds.dwData = XORDER_IPC_MESSAGE_ID;
-        cds.cbData = sizeof(XOrderOverlayMsgData);
-        cds.lpData = &msgData;
+        // COPYDATASTRUCT cds;
+        // cds.dwData = XORDER_IPC_MESSAGE_ID;
+        // cds.cbData = sizeof(XOrderOverlayMsgData);
+        // cds.lpData = &msgData;
 
-        // Send the message with a timeout.
-        // Envoyer le message avec un délai d'attente.
-        LRESULT result = SendMessageTimeout(injectorHwnd, WM_COPYDATA, (WPARAM)NULL, (LPARAM)&cds, SMTO_NORMAL, 1000, nullptr);
-        if (g_VerboseLogging) {
-            if (result == 0) {
-                swprintf_s(debugMsg, L"[XOrderHook] IPC Error: SendMessageTimeout failed with code: %lu\n", GetLastError());
-                OutputDebugStringW(debugMsg);
-            } else {
-                OutputDebugStringW(L"[XOrderHook] IPC message sent successfully.\n");
-            }
-        }
-    } else {
-        if (g_VerboseLogging) {
-            // Use thread-safe logging for debugging.
-            OutputDebugStringW(L"[XOrderHook] IPC Error: Could not find injector overlay window after 5 retries.\n");
-        }
+        // LRESULT result = SendMessageTimeout(injectorHwnd, WM_COPYDATA, (WPARAM)NULL, (LPARAM)&cds, SMTO_NORMAL, 1000, nullptr);
     }
+    */
 
     // IMPORTANT: Clean up the dynamically allocated data.
     // IMPORTANT : Nettoyer les données allouées dynamiquement.
